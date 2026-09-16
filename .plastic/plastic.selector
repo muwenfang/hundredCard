@@ -1,0 +1,4 @@
+repository "Hundred Cards@tj_wechat_os_qy0xojwib_dkjvomkwvznauda@cloud.cn"
+  path "/"
+    br "/main"
+    co "/main"

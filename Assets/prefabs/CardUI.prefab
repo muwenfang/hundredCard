@@ -13,6 +13,7 @@ GameObject:
   - component: {fileID: 100004}
   - component: {fileID: 100005}
   - component: {fileID: 100006}
+  - component: {fileID: 84570736318927024}
   m_Layer: 5
   m_Name: CardUI
   m_TagString: Untagged
@@ -95,6 +96,10 @@ MonoBehaviour:
   background: {fileID: 275037884425037148}
   valueText: {fileID: 100014}
   currentSlot: {fileID: 0}
+  handAnchorMin: {x: 0.5, y: 0.5}
+  handAnchorMax: {x: 0.5, y: 0.5}
+  handSizeDelta: {x: 130, y: 125}
+  handAnchoredPosition: {x: 0, y: 0}
 --- !u!114 &100006
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -107,6 +112,26 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 19969677ab920f941bba09e1891a2190, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+--- !u!114 &84570736318927024
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 100001}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 306cc8c2b49d7114eaa3623786fc2126, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  m_IgnoreLayout: 0
+  m_MinWidth: -1
+  m_MinHeight: -1
+  m_PreferredWidth: 130
+  m_PreferredHeight: 125
+  m_FlexibleWidth: -1
+  m_FlexibleHeight: -1
+  m_LayoutPriority: 1
 --- !u!1 &100011
 GameObject:
   m_ObjectHideFlags: 0

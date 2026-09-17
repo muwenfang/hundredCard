@@ -7,17 +7,19 @@ using UnityEngine.UI;
 ///
 /// 功能（对应文本中的 dragHandler）：
 ///   1. 拖动卡牌：把卡抬到「根 Canvas」下并跟随指针，保证它渲染在手牌与槽位之上；
-///   2. 松手时检测落点：
+///   2. 松手时检测落点（按优先级）：
 ///        落在槽位上       → 交给 CardSlot.Place 放进去；
+///        落在删卡投放区   → 交给 GameManager.DeleteCard 删掉这张卡（仅删卡阶段）；
 ///        落在手牌区内     → 退回手牌区；
 ///        落在其它任何地方 → 同样退回手牌区；
 ///   3. 点击槽位里的卡 → 退回手牌区（手牌区里的卡被点击不做任何事）。
 ///
 /// 【数据与 UI 的一致性 —— 这是本类的核心约束】
-/// 换父物体这件事只允许通过下面两个方法发生，绝不在这里单独改 transform.parent：
+/// 换父物体或销毁卡牌只允许通过下面三个方法发生，绝不在这里单独改 transform.parent / Destroy：
 ///    CardSlot.Place(card)               放入槽位：写 currentCard / currentSlot + 改父物体 + 铺满槽位
 ///    GameManager.ReturnCardToHand(card) 退回手牌：清掉槽位双向引用 + 改父物体 + 还原手牌布局
-/// 两者都是「数据与 UI 一起成功或一起不动」。本类只负责判断落点，不负责搬运。
+///    GameManager.DeleteCard(card)       删卡：清掉槽位双向引用 + 移出手牌列表 + 销毁物体
+/// 三者都是「数据与 UI 一起成功或一起不动」。本类只负责判断落点，不负责搬运。
 ///
 /// 注意 1：命中判定用的是「矩形包含」而不是 EventSystem 射线，
 /// 所以槽位物体不需要挂 Image 也能被命中。
@@ -130,7 +132,16 @@ public class DragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
             Debug.LogWarning("[DragHandler] 放入槽位未成功，改为退回手牌区。");
         }
 
-        // 2) 落点不在槽位 → 一律退回手牌区。
+        // 2) 落点在删卡投放区 → 删掉这张卡（只在删卡阶段、且删卡区可见时成立）
+        if (GameManager.Instance != null
+            && GameManager.Instance.IsOverDeleteArea(eventData.position, GetEventCamera())
+            && GameManager.Instance.DeleteCard(card))
+        {
+            Debug.Log("[DragHandler] 卡已拖入删卡区并被删除。");
+            return;
+        }
+
+        // 3) 落点不在槽位也不在删卡区 → 一律退回手牌区。
         //    落在手牌区内 / 落在界面空白处 / 拖出界面，三种情况处理完全相同。
         bool overHand = GameManager.Instance != null
             && GameManager.Instance.IsOverHandArea(eventData.position, GetEventCamera());
@@ -142,7 +153,7 @@ public class DragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
             return;
         }
 
-        // 3) 兜底：没有 GameManager，或 handCardArea 没配 → 退回拖动前的父物体。
+        // 4) 兜底：没有 GameManager，或 handCardArea 没配 → 退回拖动前的父物体。
         //    原父物体若是槽位，必须走 CardSlot.Place 把数据一起补回来，不能只改父物体。
         Debug.LogWarning("[DragHandler] GameManager 或 handCardArea 不可用，退回拖动前的父物体。");
         FallbackToOrigin();

@@ -7,8 +7,9 @@ using UnityEngine;
 ///
 /// 主流程：
 ///   进入游戏 → InitializeGame() → 展示 mainMenu
-///   点击开始游戏 → StartGame() → 抽 14 张进手牌区
-///   点击下一回合 → NextTurn() → 再抽 2 张
+///   点击开始游戏 → StartGame() → 抽 14 张进手牌区（开局不删卡）
+///   点击下一回合 → NextTurn() → 再抽 2 张 → 进入删卡阶段
+///   删卡阶段   → 把 2 张卡拖进 deletionPanels → 删够之后按钮恢复，才能再点下一回合
 ///   点击结算   → Settle()   → 读槽位、判数列、加分、弹出结算画面
 ///   44 回合内没有点击过结算 → 分数归零并结束
 /// </summary>
@@ -40,6 +41,9 @@ public class GameManager : MonoBehaviour
     [Tooltip("回合上限：44 回合内没有点击结算则得分归零")]
     public int turnLimit = 44;
 
+    [Tooltip("每次点击「下一回合」抽卡后，必须删掉的卡牌数量（有且仅能删这么多）")]
+    public int deleteCountPerTurn = 2;
+
     [Header("运行时状态（只读）")]
     [Tooltip("当前累计得分")]
     public int score;
@@ -49,6 +53,12 @@ public class GameManager : MonoBehaviour
 
     [Tooltip("本局是否点击过结算")]
     public bool hasSettled;
+
+    [Tooltip("是否正处于「必须先删掉 N 张卡」的阶段。此阶段「下一回合」按钮被禁用")]
+    public bool isDeletePhase;
+
+    [Tooltip("本次删卡阶段已经删掉的张数")]
+    public int deletedCount;
 
     /// <summary>手牌区里所有卡牌实例。</summary>
     private readonly List<CardUI> handCards = new List<CardUI>();
@@ -73,6 +83,8 @@ public class GameManager : MonoBehaviour
     private void Start()
     {
         InitializeGame();
+
+        LoadAllCards();
     }
 
     // ==================================================================
@@ -87,10 +99,12 @@ public class GameManager : MonoBehaviour
     /// </summary>
     public void InitializeGame()
     {
-        LoadAllCards();
         BuildCardPool();
 
         ValidateWiring();
+
+        // 回到主菜单时把删卡阶段一并清掉，否则按钮会停在「删除2张卡」的红字状态
+        ResetDeletePhase();
 
         // 先清槽位再清手牌，避免槽位残留对已销毁卡牌的引用
         if (SlotManager.instance != null) SlotManager.instance.ClearAllSlots();
@@ -122,6 +136,31 @@ public class GameManager : MonoBehaviour
                 SlotManager.instance.TotalSlotCount));
         }
         if (UIManager.instance == null) missing.Add("场景里没有 UIManager 组件");
+        else
+        {
+            if (UIManager.instance.deletionPanels == null || UIManager.instance.deletionPanels.Count == 0)
+                missing.Add("UIManager.deletionPanels（删卡投放区）");
+            if (UIManager.instance.nextTurnButton == null)
+                missing.Add("UIManager.nextTurnButton（下一回合按钮，删卡阶段要改它的文字与颜色）");
+            if (UIManager.instance.groupScoreTexts == null || UIManager.instance.groupScoreTexts.Count == 0)
+                missing.Add("UIManager.groupScoreTexts（每组分数文本，结算时按索引 0→3 依次显示）");
+
+            // 总分文本可以留空（会自动复用 scoreText），但两个都空就真的没地方显示总分了
+            if (UIManager.instance.settleTotalScoreText == null && UIManager.instance.scoreText == null)
+                missing.Add("UIManager.settleTotalScoreText 或 scoreText（至少要有一个来显示总分）");
+
+            // 组分数文本数量与槽位组数量不一致只是提示，不阻断流程
+            if (SlotManager.instance != null
+                && UIManager.instance.groupScoreTexts != null
+                && UIManager.instance.groupScoreTexts.Count > 0
+                && UIManager.instance.groupScoreTexts.Count != SlotManager.instance.slotGroups.Count)
+            {
+                Debug.LogWarning(string.Format(
+                    "[GameManager] 组分数文本有 {0} 个，槽位分组有 {1} 组 —— " +
+                    "结算跳分只显示「两者取小」的那么多组，请核对 UIManager.groupScoreTexts 的顺序与数量。",
+                    UIManager.instance.groupScoreTexts.Count, SlotManager.instance.slotGroups.Count));
+            }
+        }
 
         if (missing.Count > 0)
         {
@@ -195,7 +234,10 @@ public class GameManager : MonoBehaviour
     // 开始游戏 / 下一回合
     // ==================================================================
 
-    /// <summary>点击「开始游戏」：切到 gamePanel，抽 14 张，进入第 1 回合。</summary>
+    /// <summary>
+    /// 点击「开始游戏」：切到 gamePanel，抽 14 张，进入第 1 回合。
+    /// 开局不进入删卡阶段 —— 删卡只发生在每次「下一回合」抽卡之后。
+    /// </summary>
     public void StartGame()
     {
         score = 0;
@@ -203,6 +245,7 @@ public class GameManager : MonoBehaviour
         hasSettled = false;
 
         BuildCardPool();
+        ResetDeletePhase();
         ClearHand();
         if (SlotManager.instance != null) SlotManager.instance.ClearAllSlots();
 
@@ -217,12 +260,32 @@ public class GameManager : MonoBehaviour
     }
 
     /// <summary>
-    /// 点击「下一回合」：继续抽 drawPerTurn（2）张。
+    /// 点击「下一回合」：继续抽 drawPerTurn（2）张，然后【强制进入删卡阶段】。
+    ///
+    /// 流程：抽 2 张 → 必须往删卡区拖掉 2 张 → 按钮恢复可点击 → 才能再点下一回合。
+    /// 删卡没完成时本方法会被直接挡回（此时按钮本身也是禁用状态，这里是第二层保护）。
+    ///
     /// 回合数已达上限时不能再推进——此时直接判定结束；
     /// 如果整局都没点击过结算，分数归零（对应「44 回合内没有点击结算算作得分为 0」）。
     /// </summary>
     public void NextTurn()
     {
+        // 结算跳分动画期间不允许推进回合（这段窗口里的盘面正在「定格展示」）
+        if (UIManager.instance != null && UIManager.instance.IsPlayingSettleSequence)
+        {
+            Debug.LogWarning("[GameManager] 结算动画播放中，暂不能进入下一回合。");
+            return;
+        }
+
+        // 删卡阶段没完成 → 不允许推进回合
+        if (isDeletePhase)
+        {
+            Debug.LogWarning(string.Format(
+                "[GameManager] 还差 {0} 张卡没删完，删完才能进入下一回合。",
+                Mathf.Max(0, deleteCountPerTurn - deletedCount)));
+            return;
+        }
+
         if (turnCount >= turnLimit)
         {
             if (!hasSettled) score = 0;
@@ -237,11 +300,25 @@ public class GameManager : MonoBehaviour
         {
             UIManager.instance.UpdateRound(turnCount, turnLimit);
         }
+
+        // 抽完卡立刻进入删卡阶段（对应「nextTurn 里增加删除卡牌函数」）
+        if (HandCardCount >= deleteCountPerTurn)
+        {
+            BeginDeletePhase();
+        }
+        else
+        {
+            // 手牌不够 2 张（牌库抽空等极端情况）就不进删卡阶段，否则玩家会被卡死
+            Debug.LogWarning(string.Format(
+                "[GameManager] 手牌只剩 {0} 张，不足 {1} 张，跳过本次删卡阶段。",
+                HandCardCount, deleteCountPerTurn));
+        }
     }
 
     /// <summary>回合用尽，收尾。</summary>
     private void EndGame()
     {
+        ResetDeletePhase();
         ClearHand();
         if (SlotManager.instance != null) SlotManager.instance.ClearAllSlots();
 
@@ -384,18 +461,160 @@ public class GameManager : MonoBehaviour
     }
 
     // ==================================================================
+    // 删卡阶段
+    // ==================================================================
+
+    /// <summary>
+    /// 进入删卡阶段：显示删卡投放区，把「下一回合」按钮变红、禁用、文字改成「删除2张卡」。
+    /// 玩家必须拖够 deleteCountPerTurn 张卡进删卡区，阶段才会结束。
+    /// </summary>
+    public void BeginDeletePhase()
+    {
+        isDeletePhase = true;
+        deletedCount = 0;
+        RefreshDeletePhaseUi();
+
+        Debug.Log(string.Format("[GameManager] 进入删卡阶段：请拖 {0} 张卡到删卡区。", deleteCountPerTurn));
+    }
+
+    /// <summary>结束删卡阶段：隐藏删卡投放区，把「下一回合」按钮还原成可点击状态。</summary>
+    public void EndDeletePhase()
+    {
+        isDeletePhase = false;
+        deletedCount = 0;
+        RefreshDeletePhaseUi();
+
+        Debug.Log("[GameManager] 删卡完成，可以继续下一回合。");
+    }
+
+    /// <summary>重置删卡阶段（开局、返回主菜单、结束游戏时调用）。</summary>
+    private void ResetDeletePhase()
+    {
+        isDeletePhase = false;
+        deletedCount = 0;
+        RefreshDeletePhaseUi();
+    }
+
+    /// <summary>
+    /// 把删卡阶段的状态刷到界面上：删卡区显示 / 隐藏 + 「下一回合」按钮的红字与禁用。
+    /// 所有改动 isDeletePhase 的地方都必须调它，否则会出现「数据在删卡阶段、界面却是正常状态」的不一致。
+    /// </summary>
+    private void RefreshDeletePhaseUi()
+    {
+        if (UIManager.instance == null) return;
+
+        UIManager.instance.SetDeletePanelVisible(isDeletePhase);
+        UIManager.instance.SetNextTurnButtonDeleteState(isDeletePhase, deleteCountPerTurn);
+    }
+
+    /// <summary>
+    /// 删除一张卡 —— 把卡拖进删卡区时由 DragHandler 调用。
+    ///
+    /// 只在删卡阶段生效；删够 deleteCountPerTurn 张后自动结束阶段（删卡区随之隐藏，
+    /// 所以「有且仅为 2 张」是天然成立的：想多删也没有可投放的区域了）。
+    /// 删除 = 从本局彻底移除，不回牌库、不进手牌。
+    /// </summary>
+    /// <returns>true = 已经删掉了；false = 不在删卡阶段或参数无效，什么都没做。</returns>
+    public bool DeleteCard(CardUI card)
+    {
+        if (!isDeletePhase)
+        {
+            Debug.LogWarning("[GameManager] 当前不在删卡阶段，忽略本次删除。");
+            return false;
+        }
+        if (card == null) return false;
+
+        if (deletedCount >= deleteCountPerTurn)
+        {
+            Debug.LogWarning("[GameManager] 本次删卡数量已达上限，忽略本次删除。");
+            return false;
+        }
+
+        // 数据与 UI 一起处理：先解除槽位双向引用，再从手牌列表移除，最后销毁物体
+        if (card.currentSlot != null) card.currentSlot.Clear();
+        handCards.Remove(card);
+
+        int value = card.Value;
+        Destroy(card.gameObject);   // 物体在本帧末尾才真正销毁，但引用已经清干净
+
+        deletedCount++;
+        Debug.Log(string.Format("[GameManager] 已删掉卡牌 {0}（{1}/{2}）。",
+            value, deletedCount, deleteCountPerTurn));
+
+        // 删够就结束阶段；删不满（例如卡被结算销毁了）就自愈，别把玩家卡死
+        EnsureDeletePhaseSolvable();
+
+        // 还在删卡阶段 → 刷新一次界面；删满了的话 EndDeletePhase 已经刷过了
+        if (isDeletePhase) RefreshDeletePhaseUi();
+
+        return true;
+    }
+
+    /// <summary>
+    /// 删卡阶段的自愈检查。
+    ///   已删满   → 结束阶段；
+    ///   手牌不够 → 也结束阶段（此时已经不可能删够，不结束的话「下一回合」按钮会永久禁用，
+    ///              玩家会被彻底卡住。宁可跳过删卡也不能卡死）。
+    /// </summary>
+    private void EnsureDeletePhaseSolvable()
+    {
+        if (!isDeletePhase) return;
+
+        int remaining = deleteCountPerTurn - deletedCount;
+        if (remaining <= 0)
+        {
+            EndDeletePhase();
+            return;
+        }
+
+        if (handCards.Count < remaining)
+        {
+            Debug.LogWarning(string.Format(
+                "[GameManager] 手牌只剩 {0} 张，已经删不满 {1} 张，自动结束删卡阶段（避免卡死）。",
+                handCards.Count, remaining));
+            EndDeletePhase();
+        }
+    }
+
+    /// <summary>
+    /// 屏幕点是否落在删卡投放区内。
+    /// 只在删卡阶段成立，且删卡区必须可见 —— 隐藏状态下拖到那个位置不会被误删。
+    /// </summary>
+    public bool IsOverDeleteArea(Vector2 screenPoint, Camera eventCamera)
+    {
+        if (!isDeletePhase) return false;
+        if (UIManager.instance == null) return false;
+
+        return UIManager.instance.IsOverDeletePanel(screenPoint, eventCamera);
+    }
+
+    // ==================================================================
     // 结算
     // ==================================================================
 
     /// <summary>
-    /// 点击「结算」：读卡 → 判断等比 / 等差 / 质数 → 加分 → 刷新分数 → 播放结算画面。
+    /// 点击「结算」：读卡 → 逐组判定（等差 / 等比 / 斐波那契 / 雀头）→ 按 SlotManager.EvaluateHand
+    /// 的规则统一算分 → 累加到总分 → 播放「逐组跳分」动画 → 弹出结算画面。
     /// 结算会把已用掉的槽位清空，让玩家继续构筑下一组数列。
+    ///
+    /// 传入 turnCount 是为了「第 1 回合即判定成功额外 +100」这条规则。
+    ///
+    /// 【注意】这里**不再**直接弹结算画面，也不再直接刷分数文本：
+    /// 交给 UIManager.PlaySettleSequence —— 它会按索引 0→3 依次显示各组分数，
+    /// 最后才显示总分，停 2 秒后才弹出 endMenuPanel（对应需求「显示完总分后停留 2 秒」）。
     /// </summary>
     public void Settle()
     {
         if (SlotManager.instance == null)
         {
             Debug.LogWarning("[GameManager] 找不到 SlotManager，无法结算。");
+            return;
+        }
+
+        // 跳分动画期间槽位里的卡已经销毁，重复点结算只会把总分冲乱 → 直接挡回
+        if (UIManager.instance != null && UIManager.instance.IsPlayingSettleSequence)
+        {
+            Debug.LogWarning("[GameManager] 结算动画播放中，忽略本次点击。");
             return;
         }
 
@@ -407,23 +626,45 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        int gained = SlotManager.instance.CalculateScore();   // 读卡 + 判数列 + 算分
-        score += gained;                                      // 加分（累加）
+        int gained = SlotManager.instance.CalculateScore(turnCount);   // 读卡 + 判数列 + 算分
+        score += gained;                                              // 加分（累加）
         hasSettled = true;
 
         // 槽位里的卡已经被消费掉，销毁它们并清空槽位
         ConsumeSlottedCards();
         SlotManager.instance.ClearAllSlots();
 
+        // 结算会销毁槽位里的卡，可能让删卡阶段变得无法完成 → 自愈检查，别把玩家卡死
+        EnsureDeletePhaseSolvable();
+
+        HandScoreResult result = SlotManager.instance.lastScoreResult;
+        string detail = string.Format("本次得分 +{0}\n\n{1}", gained, SlotManager.instance.lastResultSummary);
+
         if (UIManager.instance != null)
         {
-            UIManager.instance.UpdateScore(score);
-            UIManager.instance.ShowEndMenu(
+            UIManager.instance.PlaySettleSequence(
+                result != null ? result.groupScores : null,
+                result != null ? result.groupNames : null,
                 score,
-                string.Format("本次得分 +{0}\n\n{1}", gained, SlotManager.instance.lastResultSummary));
+                detail);
         }
 
-        Debug.Log(string.Format("[GameManager] 结算：本次 +{0}，总分 {1}。", gained, score));
+        Debug.Log(string.Format("[GameManager] 结算：本次 +{0}，总分 {1}。各组得分：{2}",
+            gained, score, DescribeGroupScores(result)));
+    }
+
+    /// <summary>把各组得分拼成一行日志，方便对照「各组之和 = 总分」。</summary>
+    private static string DescribeGroupScores(HandScoreResult result)
+    {
+        if (result == null || result.groupScores == null || result.groupScores.Count == 0) return "（无）";
+
+        string text = string.Empty;
+        for (int i = 0; i < result.groupScores.Count; i++)
+        {
+            if (i > 0) text += "，";
+            text += string.Format("{0} +{1}", result.GroupNameOf(i), result.groupScores[i]);
+        }
+        return text;
     }
 
     /// <summary>销毁所有放在槽位里的卡牌物体，并从手牌统计中移除。</summary>
@@ -456,6 +697,10 @@ public class GameManager : MonoBehaviour
         {
             UIManager.instance.ShowGamePanel();
         }
+
+        // 结算画面是从 gamePanel 上盖过去的，回来时把删卡阶段的界面重新对齐一次，
+        // 避免出现「还在删卡阶段，删卡区和红按钮却没显示」的不一致
+        RefreshDeletePhaseUi();
     }
 
     /// <summary>结算/结束画面上的「返回主菜单」。</summary>

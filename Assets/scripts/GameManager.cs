@@ -6,12 +6,21 @@ using UnityEngine;
 /// 挂在一个常驻物体上（示例场景中是 GameRoot），场景启动即自动初始化。
 ///
 /// 主流程：
-///   进入游戏 → InitializeGame() → 展示 mainMenu
-///   点击开始游戏 → StartGame() → 抽 14 张进手牌区（开局不删卡）
+///   进入游戏 → InitializeGame() → 刷新排行榜 + 展示 mainMenu
+///   点击开始游戏 → StartGame() → **先校验学号（0~300）** → 抽 14 张进手牌区（开局不删卡）
 ///   点击下一回合 → NextTurn() → 再抽 2 张 → 进入删卡阶段
 ///   删卡阶段   → 把 2 张卡拖进 deletionPanels → 删够之后按钮恢复，才能再点下一回合
-///   点击结算   → Settle()   → 读槽位、判数列、加分、弹出结算画面
+///   点击结算   → Settle()   → 读槽位、判数列、加分、逐组跳分（牌留在盘面上展示）、
+///                            动画播完才销毁槽位里的牌并弹出结算画面
 ///   44 回合内没有点击过结算 → 分数归零并结束
+///   一局结束   → EndGame() / GameOver() → 把本局成绩写进 ScoreRecordStore（同一局只写一次）
+///
+/// 【学号环节】StartGame 之前必须先有一个合法学号：
+///   1. 点「开始游戏」→ StartGame 发现还没确认学号 → 尝试直接从输入框取值校验；
+///   2. 校验通过就直接开局（所以你把「确认」按钮接到 StartGame 也能跑通）；
+///   3. 校验不通过就在提示文本上报错并弹出学号界面，等玩家改完再点「确认」。
+///   如果 UIManager 上一个输入源都没拖，会自动跳过校验并给出警告 ——
+///   即「忘了连线」不会把游戏卡死。
 /// </summary>
 public class GameManager : MonoBehaviour
 {
@@ -60,6 +69,37 @@ public class GameManager : MonoBehaviour
     [Tooltip("本次删卡阶段已经删掉的张数")]
     public int deletedCount;
 
+    [Tooltip("本局玩家的学号。-1 表示还没输入过")]
+    public int studentId = -1;
+
+    [Tooltip("本局学号是否已经确认过（校验通过才会置 true）")]
+    public bool studentIdConfirmed;
+
+    [Tooltip("最近一次学号校验失败的原因；校验通过后清空（只读，便于排查）")]
+    public string lastStudentIdError;
+
+    [Header("学号与成绩记录（参数）")]
+    [Tooltip("是否强制「先输学号再开始游戏」：开启后 StartGame 会先校验学号。" +
+             "若 UIManager 上连一个输入源都没拖，会自动跳过校验并给出警告 —— 忘记连线不会把游戏卡死")]
+    public bool requireStudentId = true;
+
+    [Tooltip("学号允许的最小值（含）")]
+    public int studentIdMin = 0;
+
+    [Tooltip("学号允许的最大值（含）")]
+    public int studentIdMax = 300;
+
+    [Tooltip("是否每次回到主菜单都重新要求输学号。" +
+             "勾上 = 换一名学生就重输一次；不勾 = 同一次运行内沿用上一次确认过的学号")]
+    public bool askStudentIdEveryGame = true;
+
+    [Tooltip("一局结束时是否自动写一条记录（学号 / 平均分 / 最高得分 / 游玩局数）。" +
+             "按学号聚合：游玩局数累加、最高得分取历史最高、平均分 = 累计总分 ÷ 局数")]
+    public bool recordResultOnGameEnd = true;
+
+    /// <summary>本局是否已经写过记录（防止 EndGame 与 GameOver 被先后调用时把同一局记两次）。</summary>
+    private bool resultRecordedThisGame;
+
     /// <summary>手牌区里所有卡牌实例。</summary>
     private readonly List<CardUI> handCards = new List<CardUI>();
 
@@ -103,6 +143,9 @@ public class GameManager : MonoBehaviour
 
         ValidateWiring();
 
+        // 默认每次都重新要求输学号：回到主菜单后换一名学生，不会误用上一个人的学号
+        if (askStudentIdEveryGame) ResetStudentId();
+
         // 回到主菜单时把删卡阶段一并清掉，否则按钮会停在「删除2张卡」的红字状态
         ResetDeletePhase();
 
@@ -112,6 +155,10 @@ public class GameManager : MonoBehaviour
 
         if (UIManager.instance != null)
         {
+            // 排行榜：重新读一遍记录文件再刷新文本。
+            // 放在 InitializeUi 之前 —— 主菜单一露出来，榜上的内容就已经是最新的了。
+            UIManager.instance.RefreshRanking();
+
             UIManager.instance.UpdateScore(score);
             UIManager.instance.UpdateRound(turnCount, turnLimit);
             UIManager.instance.InitializeUi();  // 展示 mainMenu
@@ -144,6 +191,36 @@ public class GameManager : MonoBehaviour
                 missing.Add("UIManager.nextTurnButton（下一回合按钮，删卡阶段要改它的文字与颜色）");
             if (UIManager.instance.groupScoreTexts == null || UIManager.instance.groupScoreTexts.Count == 0)
                 missing.Add("UIManager.groupScoreTexts（每组分数文本，结算时按索引 0→3 依次显示）");
+
+            if (UIManager.instance.studentIdInput == null)
+                missing.Add("UIManager.studentIdInput（学号输入框）");
+            else if (UIManager.instance.studentIdHintText == null)
+                Debug.LogWarning("[GameManager] UIManager.studentIdHintText 没拖：学号输入非法时玩家在界面上看不到提示，" +
+                                 "只能在 Console 里看到原因。建议拖一个 Text 上去。");
+
+            if (UIManager.instance.rankingText == null)
+                missing.Add("UIManager.rankingText（排行榜文本，展示 学号/平均分/最高得分/游玩局数）");
+
+            // 教程：面板拖了却没拖正文文本，点开就是一片空白（内容写不进去），属于必检项
+            if (UIManager.instance.tutorialPanel != null && UIManager.instance.tutorialText == null)
+                missing.Add("UIManager.tutorialText（教程正文文本；教程面板已拖入但正文没拖，点开会是空白）");
+            // 正文来源两个都空则连内容都取不到
+            if (UIManager.instance.tutorialText != null
+                && UIManager.instance.tutorialContent == null
+                && string.IsNullOrEmpty(UIManager.instance.tutorialResourcePath))
+                missing.Add("UIManager.tutorialContent 或 tutorialResourcePath（至少要有一个教程正文来源）");
+
+            // 写给老师：与教程共用同一套实现，检查项也一样
+            if (UIManager.instance.forTeacherPanel != null && UIManager.instance.forTeacherText == null)
+                Debug.LogWarning(
+                    "[GameManager] UIManager.forTeacherPanel 拖了，但 forTeacherText 还没拖、" +
+                    "且面板里也没找到可用的 Text (Legacy)：点开「写给老师」会是一片空白。\n" +
+                    "  请在 Canvas/forTeacher/Viewport/Content 下建一个 Text (Legacy)（Content 现在只有一个 Image），" +
+                    "再拖到 UIManager.forTeacherText 上。");
+            if (UIManager.instance.forTeacherText != null
+                && UIManager.instance.forTeacherContent == null
+                && string.IsNullOrEmpty(UIManager.instance.forTeacherResourcePath))
+                missing.Add("UIManager.forTeacherContent 或 forTeacherResourcePath（至少要有一个「写给老师」正文来源）");
 
             // 总分文本可以留空（会自动复用 scoreText），但两个都空就真的没地方显示总分了
             if (UIManager.instance.settleTotalScoreText == null && UIManager.instance.scoreText == null)
@@ -221,6 +298,9 @@ public class GameManager : MonoBehaviour
     /// <summary>结束游戏：按最终分数展示结算/结束画面。</summary>
     public void GameOver()
     {
+        // 一局到此为止：先把成绩写进记录，再走界面流程
+        RecordCurrentGameResult();
+
         if (UIManager.instance == null) return;
 
         string detail = hasSettled
@@ -231,18 +311,129 @@ public class GameManager : MonoBehaviour
     }
 
     // ==================================================================
-    // 开始游戏 / 下一回合
+    // 学号校验（startGame 之前的环节）
     // ==================================================================
 
     /// <summary>
-    /// 点击「开始游戏」：切到 gamePanel，抽 14 张，进入第 1 回合。
+    /// 点击「开始游戏」：**先过学号这一关**，再切到 gamePanel、抽 14 张、进入第 1 回合。
     /// 开局不进入删卡阶段 —— 删卡只发生在每次「下一回合」抽卡之后。
+    ///
+    /// 学号关卡的三种走向：
+    ///   1. requireStudentId 关掉 / 已经确认过学号 → 直接开局；
+    ///   2. 还没确认 → 当场读输入框校验一次，通过就开局（所以「确认」按钮直接接到 StartGame 也能跑通）；
+    ///   3. 校验不通过 → 把原因写到提示文本并亮出学号界面，本次不开始游戏。
+    ///
+    /// 例外：UIManager 上一个输入源都没拖时，会打警告后跳过校验直接开局 ——
+    /// 忘记连线只会少一层校验，不至于把游戏彻底卡死。
     /// </summary>
     public void StartGame()
+    {
+        if (requireStudentId && !studentIdConfirmed)
+        {
+            if (!HasStudentIdInputSource())
+            {
+                Debug.LogWarning("[GameManager] requireStudentId 已开启，但 UIManager 上没有拖入学号输入框" +
+                                 "（studentIdInput / studentIdText），本次跳过学号校验直接开局。");
+            }
+            else if (!ConfirmStudentId())
+            {
+                // 顺序很重要：ShowStudentIdPanel 会清掉上一次的提示，
+                // 所以必须「先亮界面、再把这次的出错原因写上去」，反了玩家就什么都看不到。
+                if (UIManager.instance != null)
+                {
+                    UIManager.instance.ShowStudentIdPanel();
+                    UIManager.instance.ShowStudentIdHint(lastStudentIdError);
+                }
+
+                Debug.LogWarning("[GameManager] 学号校验未通过，本次不开始游戏。");
+                return;
+            }
+        }
+
+        StartGameInternal();
+    }
+
+    /// <summary>
+    /// 「确认」按钮的入口：校验学号，通过则立刻开局。
+    /// （UIManager.SubmitStudentId 调的就是它；你也可以把按钮直接挂到 StartGame，两条路等价）
+    /// </summary>
+    /// <returns>true = 学号合法且本局已经开始。</returns>
+    public bool ConfirmStudentIdAndStart()
+    {
+        if (!ConfirmStudentId()) return false;
+
+        StartGameInternal();
+        return true;
+    }
+
+    /// <summary>
+    /// 只做「读输入 → 校验 → 记下学号」，不开局。
+    /// 校验失败时会把中文原因写到 UIManager.studentIdHintText 上，
+    /// 同时也存进 <see cref="lastStudentIdError"/>，方便调用方先亮界面再补写提示。
+    /// </summary>
+    /// <returns>true = 学号合法且已记录。</returns>
+    public bool ConfirmStudentId()
+    {
+        if (UIManager.instance == null)
+        {
+            Debug.LogWarning("[GameManager] 场景里没有 UIManager，无法读取学号输入。");
+            return false;
+        }
+
+        int id;
+        string error;
+        if (!UIManager.instance.TryReadStudentId(studentIdMin, studentIdMax, out id, out error))
+        {
+            lastStudentIdError = error;
+            UIManager.instance.ShowStudentIdHint(error);
+            return false;
+        }
+
+        lastStudentIdError = null;
+        ApplyStudentId(id);
+        return true;
+    }
+
+    /// <summary>记下学号：写入字段、收起学号界面、清掉提示、把输入框预填成这个值。</summary>
+    private void ApplyStudentId(int id)
+    {
+        studentId = id;
+        studentIdConfirmed = true;
+
+        if (UIManager.instance != null)
+        {
+            UIManager.instance.ClearStudentIdHint();
+            UIManager.instance.SetStudentIdPanelVisible(false);
+            UIManager.instance.RememberStudentId(id);
+        }
+
+        Debug.Log("[GameManager] 学号已确认：" + id + "。");
+    }
+
+    /// <summary>清掉当前的学号（回到主菜单、或要换一名学生时调用）。</summary>
+    public void ResetStudentId()
+    {
+        studentId = -1;
+        studentIdConfirmed = false;
+        lastStudentIdError = null;
+    }
+
+    /// <summary>UIManager 上是否至少拖了一个学号输入源。</summary>
+    private static bool HasStudentIdInputSource()
+    {
+        return UIManager.instance != null
+            && (UIManager.instance.studentIdInput != null);
+    }
+
+    /// <summary>
+    /// 真正开始一局的流程（不含学号校验）。
+    /// </summary>
+    private void StartGameInternal()
     {
         score = 0;
         turnCount = 1;
         hasSettled = false;
+        resultRecordedThisGame = false;
 
         BuildCardPool();
         ResetDeletePhase();
@@ -259,6 +450,52 @@ public class GameManager : MonoBehaviour
         DrawCards(initialDrawCount);
     }
 
+    // ==================================================================
+    // 成绩记录
+    // ==================================================================
+
+    /// <summary>
+    /// 把本局成绩写进记录（需求 2）。**同一局只会写一次**，
+    /// 所以 EndGame 与 GameOver 被先后触发也不会把一局算成两局。
+    ///
+    /// 记录按学号聚合（一条记录 = 学号 / 平均分 / 最高得分 / 游玩局数）：
+    ///   游玩局数 +1、累计总分 += 本局得分、最高得分取历史最高，
+    ///   平均分不落盘，由「累计总分 ÷ 游玩局数」在显示排行榜时现算。
+    /// </summary>
+    /// <returns>true = 本次确实写入了一条记录。</returns>
+    public bool RecordCurrentGameResult()
+    {
+        if (!recordResultOnGameEnd) return false;
+
+        if (resultRecordedThisGame)
+        {
+            Debug.Log("[GameManager] 本局成绩已经记录过，忽略重复写入。");
+            return false;
+        }
+
+        if (!studentIdConfirmed || studentId < studentIdMin || studentId > studentIdMax)
+        {
+            Debug.LogWarning("[GameManager] 还没有确认合法的学号，本局成绩不写入记录。");
+            return false;
+        }
+
+        resultRecordedThisGame = true;
+        StudentRecord record = ScoreRecordStore.AddResult(studentId, score);
+
+        // 顺手刷新排行榜文本（面板没显示也不影响，只是把内容准备好）
+        if (UIManager.instance != null) UIManager.instance.RefreshRankingText(UIManager.instance.rankingSortMode);
+
+        Debug.Log(string.Format(
+            "[GameManager] 学号 {0} 本局 {1} 分已记录 → 共 {2} 局，平均 {3:0.00}，最高 {4}。",
+            record.studentId, score, record.playCount, record.Average, record.highScore));
+
+        return true;
+    }
+
+    // ==================================================================
+    // 下一回合 / 结束
+    // ==================================================================
+
     /// <summary>
     /// 点击「下一回合」：继续抽 drawPerTurn（2）张，然后【强制进入删卡阶段】。
     ///
@@ -271,7 +508,7 @@ public class GameManager : MonoBehaviour
     public void NextTurn()
     {
         // 结算跳分动画期间不允许推进回合（这段窗口里的盘面正在「定格展示」）
-        if (UIManager.instance != null && UIManager.instance.IsPlayingSettleSequence)
+        if (IsSettleSequencePlaying)
         {
             Debug.LogWarning("[GameManager] 结算动画播放中，暂不能进入下一回合。");
             return;
@@ -315,7 +552,7 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    /// <summary>回合用尽，收尾。</summary>
+    /// <summary>回合用尽，收尾：把本局成绩写进记录，然后弹出结束画面。</summary>
     private void EndGame()
     {
         ResetDeletePhase();
@@ -326,6 +563,9 @@ public class GameManager : MonoBehaviour
         {
             UIManager.instance.UpdateScore(score);
         }
+
+        // 一局到此为止：写记录（同一局只会写一次，见 RecordCurrentGameResult）
+        RecordCurrentGameResult();
 
         string detail = hasSettled
             ? string.Format("{0} 回合已用尽，共结算过若干次。", turnLimit)
@@ -595,13 +835,17 @@ public class GameManager : MonoBehaviour
     /// <summary>
     /// 点击「结算」：读卡 → 逐组判定（等差 / 等比 / 斐波那契 / 雀头）→ 按 SlotManager.EvaluateHand
     /// 的规则统一算分 → 累加到总分 → 播放「逐组跳分」动画 → 弹出结算画面。
-    /// 结算会把已用掉的槽位清空，让玩家继续构筑下一组数列。
     ///
     /// 传入 turnCount 是为了「第 1 回合即判定成功额外 +100」这条规则。
     ///
-    /// 【注意】这里**不再**直接弹结算画面，也不再直接刷分数文本：
+    /// 【注意 1】这里**不**直接弹结算画面、**不**直接刷分数文本：
     /// 交给 UIManager.PlaySettleSequence —— 它会按索引 0→3 依次显示各组分数，
     /// 最后才显示总分，停 2 秒后才弹出 endMenuPanel（对应需求「显示完总分后停留 2 秒」）。
+    ///
+    /// 【注意 2】结算时槽位里的牌**不是立刻销毁**：它们会原样留在槽位上，
+    /// 等跳分动画播完（UIManager 回调 <see cref="FinishSettlement"/>）才销毁并清空槽位。
+    /// 这样逐组显示分数时盘面上的牌还在，玩家能对照着看出每一组是哪几个数字凑出来的。
+    /// 动画期间这些牌不接受拖动与点击，见 <see cref="IsSettleSequencePlaying"/>。
     /// </summary>
     public void Settle()
     {
@@ -611,8 +855,8 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        // 跳分动画期间槽位里的卡已经销毁，重复点结算只会把总分冲乱 → 直接挡回
-        if (UIManager.instance != null && UIManager.instance.IsPlayingSettleSequence)
+        // 跳分动画期间槽位里的卡还没有结算收尾，重复点结算只会把总分冲乱 → 直接挡回
+        if (IsSettleSequencePlaying)
         {
             Debug.LogWarning("[GameManager] 结算动画播放中，忽略本次点击。");
             return;
@@ -630,27 +874,56 @@ public class GameManager : MonoBehaviour
         score += gained;                                              // 加分（累加）
         hasSettled = true;
 
-        // 槽位里的卡已经被消费掉，销毁它们并清空槽位
-        ConsumeSlottedCards();
-        SlotManager.instance.ClearAllSlots();
-
-        // 结算会销毁槽位里的卡，可能让删卡阶段变得无法完成 → 自愈检查，别把玩家卡死
-        EnsureDeletePhaseSolvable();
-
         HandScoreResult result = SlotManager.instance.lastScoreResult;
         string detail = string.Format("本次得分 +{0}\n\n{1}", gained, SlotManager.instance.lastResultSummary);
 
+        // 销毁槽位里的牌 + 清空槽位，推迟到动画播完再做（见 FinishSettlement）
         if (UIManager.instance != null)
         {
             UIManager.instance.PlaySettleSequence(
                 result != null ? result.groupScores : null,
                 result != null ? result.groupNames : null,
                 score,
-                detail);
+                detail,
+                FinishSettlement);
+        }
+        else
+        {
+            // 没有 UIManager 就没有动画，直接收尾，别让牌一直留在槽位上
+            FinishSettlement();
         }
 
         Debug.Log(string.Format("[GameManager] 结算：本次 +{0}，总分 {1}。各组得分：{2}",
             gained, score, DescribeGroupScores(result)));
+    }
+
+    /// <summary>
+    /// 结算收尾：销毁槽位里的牌 → 清空槽位 → 自愈检查删卡阶段。
+    /// 由 UIManager 在逐组跳分动画播完时回调（正常路径），
+    /// 或由本类在没有 UIManager 时直接调用。
+    ///
+    /// 【为什么要延后到动画结束】动画要一屏一屏地显示每一组的得分，
+    /// 牌在这期间必须留在槽位上，玩家才对得上「这一组是哪几个数字」。
+    /// </summary>
+    private void FinishSettlement()
+    {
+        ConsumeSlottedCards();
+        if (SlotManager.instance != null) SlotManager.instance.ClearAllSlots();
+
+        // 结算会销毁槽位里的卡，可能让删卡阶段变得无法完成 → 自愈检查，别把玩家卡死
+        EnsureDeletePhaseSolvable();
+
+        Debug.Log("[GameManager] 结算收尾：槽位里的卡已销毁，槽位已清空。");
+    }
+
+    /// <summary>
+    /// 是否正在播放结算跳分动画。
+    /// 动画期间盘面是「定格展示」状态：槽位里的牌还没销毁、也不该被拖走或点回手牌，
+    /// 所以它同时也是「暂停交互」的开关（DragHandler 会读它）。
+    /// </summary>
+    public bool IsSettleSequencePlaying
+    {
+        get { return UIManager.instance != null && UIManager.instance.IsPlayingSettleSequence; }
     }
 
     /// <summary>把各组得分拼成一行日志，方便对照「各组之和 = 总分」。</summary>

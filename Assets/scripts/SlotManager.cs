@@ -5,13 +5,13 @@ using UnityEngine;
 /// <summary>槽位组可以判定的数列 / 牌型种类。</summary>
 public enum SequenceType
 {
-    /// <summary>等差：升序后相邻差值全部相等（公差 &gt; 0）。例：2,5,8,11。</summary>
+    /// <summary>等差：升序后相邻差值全部相等（公差 &gt; 0）。</summary>
     Arithmetic,
 
-    /// <summary>等比：升序后每一项的平方等于前后两项之积（支持 4,6,9 这类分数公比）。例：2,4,8,16。</summary>
+    /// <summary>等比：升序后每一项的平方等于前后两项之积（支持 4,6,9 这类分数公比）。</summary>
     Geometric,
 
-    /// <summary>斐波那契：升序后每一项等于前两项之和。例：2,3,5,8。</summary>
+    /// <summary>斐波那契：升序后每一项等于前两项之和。</summary>
     Fibonacci,
 
     /// <summary>质数：组内每个数字都是质数。默认不参与任何组，需要时在 Inspector 里加进候选列表。</summary>
@@ -24,28 +24,6 @@ public enum SequenceType
     Pair
 }
 
-/// <summary>
-/// 一个槽位组 = 一个槽位容器 + 该组合法的牌型（候选类型列表）。
-///
-/// 【重要：组号与类型不绑定】
-/// 组里没有「你必须是等差」这种固定身份。每组持有一份「候选类型列表」，
-/// 结算时对列表里的每一种类型各判定一次，只要有任意一种命中就算本组合规。
-/// 因此 4 槽的三组内容完全一样：都判 等差 / 等比 / 斐波那契 三次。
-///
-/// 【重要：本组不再单独加分】
-/// 加分规则见 SlotManager 顶部的说明，全部由 SlotManager.EvaluateHand 按整手牌统一计算。
-/// 本组只负责回答「这一组里的牌是否合规」。
-///
-/// 【怎么用（重要）】
-/// 你不需要在 Inspector 里一个个拖槽位。只要：
-///   1. 在场景里建一个空的 UI 物体当「本组容器」（例如 Group1，可带 HorizontalLayoutGroup）；
-///   2. 把本组的槽位物体都放在它下面，每个槽位物体上挂 CardSlot 组件；
-///   3. 把容器拖到下面的 container 字段上。
-/// 运行时 SlotManager.BuildSlots() 会自动收集容器下所有 CardSlot（含未激活的子物体），
-/// 收集顺序就是它们在 Hierarchy 里的排列顺序，也就是读卡顺序。
-///
-/// 如果不想用容器，也可以把 CardSlot 一个个拖进 slots 列表（container 为空时才会用这个）。
-/// </summary>
 [System.Serializable]
 public class SlotGroup
 {
@@ -113,9 +91,6 @@ public class SlotGroup
     /// 按槽位数给出默认的候选类型：
     ///   2 槽组 → 只有「雀头」（两张数字相同的牌）；
     ///   其余   → 等差 / 等比 / 斐波那契（正好三种，即每组判三次）。
-    ///
-    /// 为什么 2 槽组不判等差等比：只有两个数时，任何两个不同的数都必然满足等差，
-    /// 也必然满足等比的交叉相乘条件，判定会「无脑通过」，等于白送分。
     /// </summary>
     public static List<SequenceType> DefaultCandidateTypes(int slotCount)
     {
@@ -278,8 +253,7 @@ public class HandLayout
     public bool allSlotsFilled;
 
     /// <summary>
-    /// 槽位组总数（= 场景里 slotGroups 的条数，本工程是 4：3 个数列组 + 1 个雀头组）。
-    /// 用于把「手牌级加分」平摊到各组；填 0 时按 三条数列 + 1 推断。
+    /// 槽位组总数（= 场景里 slotGroups 的条数）。
     /// </summary>
     public int groupCount;
 
@@ -314,7 +288,7 @@ public class ScoreItem
 /// <summary>一手牌的结算结果。</summary>
 public class HandScoreResult
 {
-    /// <summary>这手牌是否「合规放置」（所有槽位放满 + 每条数列都命中至少一种类型 + 雀头是两张相同的牌）。</summary>
+    /// <summary>这手牌是否「合规放置」。</summary>
     public bool legal;
 
     /// <summary>本次总得分。布局不合规时为 0。</summary>
@@ -358,51 +332,9 @@ public class HandScoreResult
 ///   3. 数列判定：对每个组逐项判定它配置的候选类型（等差 / 等比 / 斐波那契 / 质数 / 雀头）；
 ///   4. 结算分数：把整手牌交给 EvaluateHand，按下面的规则算总分。
 ///
-/// 【槽位怎么接进来】
-/// 只需要把 4 个「槽位容器」拖到 slotGroups 里各组的 container 字段上，
-/// 槽位本身（挂了 CardSlot 的物体）放在容器下面就行，数量由代码自动数出来。
-/// 部署：3 组各放 4 个槽位 + 1 组放 2 个槽位，合计 14 个。
-///
-/// 【判定规则】
-/// 4 槽的三组内容一致，都判 等差 / 等比 / 斐波那契 三次；2 槽组判「雀头」（两张数字相同）。
-/// 判定与组号无关，只看这一组里的数字满不满足对应规则。
-///
 /// 【加分规则（全部在 EvaluateHand 里实现，纯静态、可离线回归）】
 /// 前置：三条数列都命中 + 雀头是两张相同的牌 + 所有槽位放满，才叫「合规放置」，
 ///       不合规则本次得 0 分（后续所有加分项都不再计算）。
-///
-///   底分        合规放置                                   +1
-///   时机        第 1 回合即判定成功                        +100
-///   数字种类    所有数同奇偶                               +10
-///               所有数都是质数                             +100
-///               所有数都是合数                             +1
-///   数列种类    所有数列都是等差                           +5
-///               所有数列都是等比                           +50
-///               所有数列都是斐波那契                       +15
-///               三条数列恰好为等差/等比/斐波那契各一个     +30
-///   长度重叠    三个等差拼成一条 12 项等差                 +30
-///               两个等差拼成一条 8 项等差                  +10
-///               两个斐波那契拼成一条 8 项斐波那契          +100
-///               存在两条完全相等的数列                     +36
-///               某数字同属两条数列                         +6 × 个数
-///   公差公比    两条等差公差相同                           +10
-///               三条等差公差均相同                         +20
-///               两条等比公比相同                           +50
-///               三条等比公比均相同                         +100
-///   雀头        雀头为质数                                 +1
-///               雀头为 1 或 100                            +10
-///
-/// 【两处需要留意的取舍，见对应方法的注释】
-///   1. 公差 / 公比的「两条相同」与「三条均相同」是分层取值，不叠加（三条均相同只算 +20 / +100）。
-///   2. 「三条恰好各一种」用「是否存在一一对应」判定，即每条数列各自命中一个互不相同的类型。
-///
-/// 【每组分数是怎么来的（归因 + 分摊）】
-/// 上面这套规则大多是「手牌级」的（底分、回合、数字种类、数列种类），并不天然属于某一组。
-/// 为了让结算画面上那 4 个逐组跳分的文本有真实含义，每条加分项都记了一份「归属组」：
-///   能明确归到组的（两条公差相同、两条相等数列、拼成一条、共享数字、雀头等）→ 只在这些组之间分摊；
-///   手牌级的 → 平摊到全部组。
-/// 分摊时「整除后余数补给索引最小的组」，因此 **各组分数之和恒等于总分**，界面上不会对不上账。
-/// 实现在 DistributePoints 与 EvaluateHand 末尾的汇总循环里，均为纯静态、可离线回归。
 /// </summary>
 public class SlotManager : MonoBehaviour
 {
@@ -865,11 +797,11 @@ public class SlotManager : MonoBehaviour
 
         if (result.matched)
         {
-            return string.Format("{0} [{1}] 判定 {2} → 命中【{3}】",
+            return string.Format("{0} [{1}] 判定→ 命中【{3}】",
                 result.groupName, values, tried, TypeNamesOf(result.matchedTypes));
         }
 
-        return string.Format("{0} [{1}] 判定 {2} → 均未命中", result.groupName, values, tried);
+        return string.Format("{0} [{1}] 判定→ 均未命中", result.groupName, values, tried);
     }
 
     /// <summary>
@@ -944,17 +876,9 @@ public class SlotManager : MonoBehaviour
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// 给一手牌算分。
-    ///
     /// 顺序：先判「是否合规放置」——不合规直接 0 分，后面所有加分项都不算。
     /// 合规之后按需求文本的顺序逐条累加：底分 → 时机 → 数字种类 → 数列种类 →
     /// 长度与重叠 → 公差公比 → 雀头。
-    ///
-    /// 每条加分项除了分值，还带一份「归属组」（见 ScoreItem.ownerGroups）。
-    /// 汇总时一边累加 total，一边用 DistributePoints 摊到 result.groupScores，
-    /// 保证 groupScores 之和恰好等于 total —— 这是结算画面逐组跳分能对上账的前提。
-    ///
-    /// 纯静态、不碰任何 Unity 对象，因此可以脱离运行时直接喂用例做回归。
     /// </summary>
     /// <param name="layout">手牌布局（三条数列 + 雀头 + 是否放满 + 组数 / 各组索引）。</param>
     /// <param name="turnCount">判定时的回合数。</param>
@@ -1134,10 +1058,6 @@ public class SlotManager : MonoBehaviour
     ///   groups 为空 / 存在无效索引（-1 或越界）→ 视为手牌级加分，分摊到全部组。
     /// 只要出现无效索引就整条按手牌级处理，而不是「跳过无效的那几个」——
     /// 后者会让某个组的份额被静默丢掉，分摊之和就不再等于分值了。
-    ///
-    /// 分摊规则：points / 组数 取整先给每组，余数依次补给**索引最小**的前几个组，
-    /// 因此各组分摊之和恰好等于 points——四组分数相加必然等于总分，界面上不会对不上账。
-    /// 纯静态、不碰 Unity 对象，可离线验证。
     /// </summary>
     /// <param name="points">该条加分项的分值（非正数直接忽略）。</param>
     /// <param name="groups">归属的组索引列表，可为 null / 空。</param>

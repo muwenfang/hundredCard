@@ -26,6 +26,9 @@ using UnityEngine.UI;
 ///
 /// 注意 2：必须显式实现 IBeginDragHandler / IDragHandler / IEndDragHandler / IPointerClickHandler，
 /// 光有同名方法是不够的 —— EventSystem 是用接口类型去查找事件处理者的。
+///
+/// 注意 3：结算逐组跳分播放期间盘面「定格展示」（槽位上的牌还没销毁），
+/// 这段时间不接受任何拖拽与点击，见 IsBoardFrozen。
 /// </summary>
 [RequireComponent(typeof(CardUI))]
 public class DragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDragHandler, IPointerClickHandler
@@ -56,6 +59,11 @@ public class DragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
     {
         EnsureRefs();
         if (rect == null) return;
+
+        // 结算跳分播放中：盘面正在「定格展示」，槽位上的牌还没销毁。
+        // 此时不允许拖动 —— 否则玩家能把正在结算的牌拉回手牌或换个槽位，
+        // 动画显示的分数就和盘面对不上了。不设 dragging，后面的 OnDrag / OnEndDrag 自然什么都不做。
+        if (IsBoardFrozen()) return;
 
         // 抬到根 Canvas 下需要它。找不到就整段放弃，什么都不改 ——
         // 绝不能出现「已经清了槽位数据、却没把卡搬走」的中间状态。
@@ -171,6 +179,7 @@ public class DragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
     {
         if (eventData.button != PointerEventData.InputButton.Left) return;
         if (dragging) return;                                    // 拖拽过程中不算点击
+        if (IsBoardFrozen()) return;                             // 结算跳分播放中：牌要留在盘面上展示
 
         EnsureRefs();
         if (card == null || card.currentSlot == null) return;     // 只处理槽位里的卡
@@ -195,6 +204,16 @@ public class DragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
             rootCanvas = GetComponentInParent<Canvas>();
             if (rootCanvas != null) rootCanvas = rootCanvas.rootCanvas;
         }
+    }
+
+    /// <summary>
+    /// 盘面是否处于「定格展示」状态（结算逐组跳分播放中）。
+    /// 这期间槽位里的牌还没被销毁，必须留在原处让玩家对照分数看，所以拖拽与点击都要拦住。
+    /// 没有 GameManager 时视为不冻结（宁可让玩家能操作，也不要整个界面点不动）。
+    /// </summary>
+    private static bool IsBoardFrozen()
+    {
+        return GameManager.Instance != null && GameManager.Instance.IsSettleSequencePlaying;
     }
 
     /// <summary>把屏幕点转到「当前父物体」平面上的世界坐标。</summary>

@@ -100,6 +100,25 @@ public class GameManager : MonoBehaviour
     /// <summary>本局是否已经写过记录（防止 EndGame 与 GameOver 被先后调用时把同一局记两次）。</summary>
     private bool resultRecordedThisGame;
 
+    /// <summary>
+    /// 当前是否有「一局」正在进行：StartGame 之后置 true，结束一局 / 回到主菜单后置 false。
+    ///
+    /// 【为什么需要这个开关】记录只能在「一局结束」时写一次，而 InitializeGame() 在游戏刚启动
+    /// （Start() 里）也会被调用一次 —— 那一次并没有任何一局可记，必须靠它挡掉，
+    /// 否则会用初始的 0 分凭空造出一条记录。
+    /// </summary>
+    private bool gameStarted;
+
+    /// <summary>
+    /// 本局是否已经被 EndGame() / GameOver() 正式判定结束（典型是 44 回合用尽）。
+    ///
+    /// 【为什么要单独一个标记】记录不仅要在「结束的那一瞬间」写，还要在玩家
+    /// 「从结束画面回主菜单 / 直接关窗口」时兜底补写（结算成功的那一局就靠这条路径）。
+    /// 而兜底补写必须能区分「打完的一局」和「玩到一半放弃的一局」——
+    /// 只看 hasSettled 判断不了「回合用尽但一次都没结算」的情形，所以在这里单独记一个。
+    /// </summary>
+    private bool roundConcluded;
+
     /// <summary>手牌区里所有卡牌实例。</summary>
     private readonly List<CardUI> handCards = new List<CardUI>();
 
@@ -139,6 +158,20 @@ public class GameManager : MonoBehaviour
     /// </summary>
     public void InitializeGame()
     {
+        // 【一局结束的兜底 —— 位置绝对不能后移，也不能挪到 ResetStudentId 之后】
+        //
+        // 点「结算」成功结束的那一局**不会**走 EndGame()：结算动画播完直接弹 endMenu，
+        // 玩家点「返回主菜单」就走到这里。如果只在 EndGame() / GameOver() 里写记录，
+        // 所有「结算成功」的局都会被漏掉，排行榜上就只剩「回合用尽」那一类失败局
+        // —— 表现就是「失败的局有记录、成功的局没有」。
+        //
+        // 必须放在 ResetStudentId() 之前：它会把 studentId 与 studentIdConfirmed 一起清掉，
+        // 清完再记就变成「没有合法学号」，记不上了。
+        RecordCurrentGameResult();
+
+        // 回到主菜单 = 当前没有进行中的对局（防止在启动时凭空记录，见 gameStarted 的注释）
+        gameStarted = false;
+
         BuildCardPool();
 
         ValidateWiring();
@@ -159,7 +192,6 @@ public class GameManager : MonoBehaviour
             // 放在 InitializeUi 之前 —— 主菜单一露出来，榜上的内容就已经是最新的了。
             UIManager.instance.RefreshRanking();
 
-            UIManager.instance.UpdateScore(score);
             UIManager.instance.UpdateRound(turnCount, turnLimit);
             UIManager.instance.InitializeUi();  // 展示 mainMenu
         }
@@ -298,7 +330,8 @@ public class GameManager : MonoBehaviour
     /// <summary>结束游戏：按最终分数展示结算/结束画面。</summary>
     public void GameOver()
     {
-        // 一局到此为止：先把成绩写进记录，再走界面流程
+        // 一局到此为止：先标记「本局已结束」，再把成绩写进记录，最后走界面流程
+        roundConcluded = true;
         RecordCurrentGameResult();
 
         if (UIManager.instance == null) return;
@@ -434,6 +467,8 @@ public class GameManager : MonoBehaviour
         turnCount = 1;
         hasSettled = false;
         resultRecordedThisGame = false;
+        gameStarted = true;              // 从这里开始「有一局在进行」，结束一局时才会写记录
+        roundConcluded = false;          // 本局尚未结束，中途退出不算成绩
 
         BuildCardPool();
         ResetDeletePhase();
@@ -443,7 +478,6 @@ public class GameManager : MonoBehaviour
         if (UIManager.instance != null)
         {
             UIManager.instance.ShowGamePanel();
-            UIManager.instance.UpdateScore(score);
             UIManager.instance.UpdateRound(turnCount, turnLimit);
         }
 
@@ -455,8 +489,89 @@ public class GameManager : MonoBehaviour
     // ==================================================================
 
     /// <summary>
+    /// 「本局要不要写进记录」的纯判定结果。
+    /// 判定本身不碰任何 Unity 运行时状态，可以离线回归（见 HC_Check 里的用例）。
+    /// </summary>
+    public enum RecordDecision
+    {
+        /// <summary>写：本局有效，可以落盘。</summary>
+        Record,
+
+        /// <summary>不写，但属于正常情况（程序刚启动、同一个结束点被重复触发），不必报警告。</summary>
+        SkipBenign,
+
+        /// <summary>不写，且值得在 Console 里提醒（记录开关关着、中途放弃、没有合法学号）。</summary>
+        SkipNotable
+    }
+
+    /// <summary>
+    /// 判断本局该不该写进记录。这是「记录功能会不会漏记」的唯一裁决点 ——
+    /// 所有调用点（EndGame / GameOver / InitializeGame / ExitGame / OnApplicationQuit）
+    /// 都只负责在**正确的时机**调过来，要不要写由这里说了算。
+    ///
+    /// 判定顺序即优先级：开关 → 有没有一局 → 是不是已经记过 → 这一局算不算打完 → 学号是否合法。
+    /// </summary>
+    /// <param name="recordEnabled">recordResultOnGameEnd。</param>
+    /// <param name="gameStarted">是否有一局在进行。</param>
+    /// <param name="alreadyRecorded">本局是否已经记过（幂等保护）。</param>
+    /// <param name="hasSettled">本局是否点过结算。</param>
+    /// <param name="roundConcluded">本局是否已被 EndGame / GameOver 正式判定结束。</param>
+    /// <param name="idConfirmed">是否已确认合法学号。</param>
+    /// <param name="reason">不写时的中文原因；要写时为 null。</param>
+    public static RecordDecision EvaluateRecordDecision(
+        bool recordEnabled, bool gameStarted, bool alreadyRecorded,
+        bool hasSettled, bool roundConcluded, bool idConfirmed,
+        out string reason)
+    {
+        if (!recordEnabled)
+        {
+            reason = "记录开关关着（recordResultOnGameEnd = false）";
+            return RecordDecision.SkipNotable;
+        }
+
+        if (!gameStarted)
+        {
+            reason = "当前没有进行中的对局";
+            return RecordDecision.SkipBenign;
+        }
+
+        if (alreadyRecorded)
+        {
+            reason = "本局成绩已经记录过";
+            return RecordDecision.SkipBenign;
+        }
+
+        // 这一局必须「真的打完了」才有成绩可记：
+        //   hasSettled     = 玩家点过结算（哪怕结算下来是 0 分，那也是有效的一局）
+        //   roundConcluded = 本局已由 EndGame / GameOver 正式结束（典型是 44 回合用尽）
+        // 两者都不成立的，就是「玩到一半直接关窗口」这类中途放弃：
+        // 这种局从头到尾没有结算过，分数必然是 0，写进去只会把游玩局数 +1、把平均分拉低。
+        if (!hasSettled && !roundConcluded)
+        {
+            reason = "本局既没有结算、也没有打满回合，属于中途放弃";
+            return RecordDecision.SkipNotable;
+        }
+
+        if (!idConfirmed)
+        {
+            reason = "还没有确认合法的学号";
+            return RecordDecision.SkipNotable;
+        }
+
+        reason = null;
+        return RecordDecision.Record;
+    }
+
+    /// <summary>
     /// 把本局成绩写进记录（需求 2）。**同一局只会写一次**，
-    /// 所以 EndGame 与 GameOver 被先后触发也不会把一局算成两局。
+    /// 所以 EndGame / GameOver / InitializeGame / ExitGame 被先后触发也不会把一局算成两局。
+    ///
+    /// 【调用点必须是全集】目前共 4 处：EndGame（回合用尽）、GameOver（外部按钮）、
+    /// InitializeGame（玩家从结算 / 结束画面回主菜单）、ExitGame 与 OnApplicationQuit（直接关窗口）。
+    /// 少一处就会出现「某种结束方式没有成绩」的漏记 ——
+    /// 之前只有 EndGame / GameOver，于是「点结算成功结束」的局全都漏掉了。
+    ///
+    /// 要不要写由 <see cref="EvaluateRecordDecision"/> 裁决，规则见那个方法。
     ///
     /// 记录按学号聚合（一条记录 = 学号 / 平均分 / 最高得分 / 游玩局数）：
     ///   游玩局数 +1、累计总分 += 本局得分、最高得分取历史最高，
@@ -465,17 +580,21 @@ public class GameManager : MonoBehaviour
     /// <returns>true = 本次确实写入了一条记录。</returns>
     public bool RecordCurrentGameResult()
     {
-        if (!recordResultOnGameEnd) return false;
+        string reason;
+        RecordDecision decision = EvaluateRecordDecision(
+            recordResultOnGameEnd,
+            gameStarted,
+            resultRecordedThisGame,
+            hasSettled,
+            roundConcluded,
+            studentIdConfirmed && studentId >= studentIdMin && studentId <= studentIdMax,
+            out reason);
 
-        if (resultRecordedThisGame)
+        if (decision != RecordDecision.Record)
         {
-            Debug.Log("[GameManager] 本局成绩已经记录过，忽略重复写入。");
-            return false;
-        }
-
-        if (!studentIdConfirmed || studentId < studentIdMin || studentId > studentIdMax)
-        {
-            Debug.LogWarning("[GameManager] 还没有确认合法的学号，本局成绩不写入记录。");
+            string message = "[GameManager] 本局不写记录：" + reason + "。";
+            if (decision == RecordDecision.SkipBenign) Debug.Log(message);
+            else Debug.LogWarning(message);
             return false;
         }
 
@@ -564,7 +683,9 @@ public class GameManager : MonoBehaviour
             UIManager.instance.UpdateScore(score);
         }
 
-        // 一局到此为止：写记录（同一局只会写一次，见 RecordCurrentGameResult）
+        // 一局到此为止：先标记「本局已结束」（这样即使整局都没结算过，44 回合用尽也算一局 0 分），
+        // 再写记录（同一局只会写一次，见 RecordCurrentGameResult）
+        roundConcluded = true;
         RecordCurrentGameResult();
 
         string detail = hasSettled
@@ -1003,6 +1124,21 @@ public class GameManager : MonoBehaviour
     //退出游戏
     public void ExitGame()
     {
+        // 直接关窗口也是一局结束：先把成绩落盘再退出，
+        // 否则「结算完不点返回主菜单、直接退出」这一局就白打了。
+        // 要不要写由 RecordCurrentGameResult 内部裁决：中途放弃的局会被挡掉，不会污染记录。
+        RecordCurrentGameResult();
+
         Application.Quit();
+    }
+
+    /// <summary>
+    /// 正常关闭程序（点窗口右上角的 ×，或 Application.Quit）时的最后一道保险。
+    /// 和 ExitGame 走同一个幂等入口，重复调用不会把一局记成两局；
+    /// 玩到一半直接关窗口的局同样会被 EvaluateRecordDecision 挡掉。
+    /// </summary>
+    private void OnApplicationQuit()
+    {
+        RecordCurrentGameResult();
     }
 }

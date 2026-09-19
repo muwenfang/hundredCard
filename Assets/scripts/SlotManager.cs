@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
@@ -211,6 +212,203 @@ public static class ScoreRules
     public const int PairIsOneOrHundred = 10;
 }
 
+/// <summary>
+/// 加分规则的固定编号。**顺序与需求文本完全一致**，
+/// 「加分明细」按这个顺序逐条列出全部规则（命中的显示实际分值，未命中的显示 +0），
+/// 这样玩家一眼就能对照完整规则表，而不是只看到这次侥幸命中的那几条。
+/// </summary>
+public enum ScoreRuleId
+{
+    // —— 1. 底分 ——
+    /// <summary>手牌能合规放置就得到的 1 分。</summary>
+    BaseLegalPlacement = 0,
+
+    // —— 2. 判定时机 ——
+    /// <summary>第 1 回合就判定成功。</summary>
+    FirstTurnSuccess,
+
+    // —— 3. 所有数的种类 ——
+    /// <summary>所有数都是奇数或偶数。</summary>
+    AllSameParity,
+    /// <summary>所有数都是质数。</summary>
+    AllPrime,
+    /// <summary>所有数都是合数。</summary>
+    AllComposite,
+
+    // —— 4. 数列的种类 ——
+    /// <summary>所有数列都是等差数列。</summary>
+    AllSequencesArithmetic,
+    /// <summary>所有数列都是等比数列。</summary>
+    AllSequencesGeometric,
+    /// <summary>所有数列都是斐波那契数列。</summary>
+    AllSequencesFibonacci,
+    /// <summary>三个数列恰好分别是等差 / 等比 / 斐波那契各一个。</summary>
+    OneEachOfThreeKinds,
+
+    // —— 4. 数列的长度和重叠情况 ——
+    /// <summary>三个等差数列恰好拼成一条 12 项的等差数列。</summary>
+    ThreeArithmeticInto12Terms,
+    /// <summary>存在两个等差数列恰好拼成一条 8 项的等差数列。</summary>
+    TwoArithmeticInto8Terms,
+    /// <summary>存在两个斐波那契数列恰好拼成一条 8 项的斐波那契数列。</summary>
+    TwoFibonacciInto8Terms,
+    /// <summary>存在两条完全相等的数列。</summary>
+    TwoIdenticalSequences,
+    /// <summary>某个数字同时作为两条数列中的一项。</summary>
+    SharedValuePerNumber,
+
+    // —— 5. 公差 / 公比 ——
+    /// <summary>存在两条公差相同的等差数列。</summary>
+    TwoSameArithmeticDifference,
+    /// <summary>三条等差数列公差均相同。</summary>
+    ThreeSameArithmeticDifference,
+    /// <summary>存在两条公比相同的等比数列。</summary>
+    TwoSameGeometricRatio,
+    /// <summary>三条等比数列公比均相同。</summary>
+    ThreeSameGeometricRatio,
+
+    // —— 6. 剩余的两张相等的数字牌（雀头）——
+    /// <summary>雀头为质数。</summary>
+    PairIsPrime,
+    /// <summary>雀头为 1 或 100。</summary>
+    PairIsOneOrHundred,
+}
+
+/// <summary>
+/// 一条加分规则的静态定义。只在「把全部规则列出来」时用到，
+/// 与实际算分无关（分值仍然只在 ScoreRules 里改一处）。
+/// </summary>
+public class ScoreRuleDef
+{
+    /// <summary>规则编号。</summary>
+    public ScoreRuleId id;
+
+    /// <summary>需求文本里的大类序号（1~6）。</summary>
+    public int category;
+
+    /// <summary>大类名，例如「数列的长度和重叠情况」。</summary>
+    public string categoryName;
+
+    /// <summary>未命中时显示的通用文案。</summary>
+    public string label;
+
+    /// <summary>命中时的分值。</summary>
+    public int points;
+
+    public ScoreRuleDef(ScoreRuleId id, int category, string categoryName, string label, int points)
+    {
+        this.id = id;
+        this.category = category;
+        this.categoryName = categoryName;
+        this.label = label;
+        this.points = points;
+    }
+}
+
+/// <summary>
+/// 全部加分规则的清单，顺序 = 需求文本的顺序。
+/// 「加分明细」就是按这份清单逐条输出，所以**新增规则时只要在这里补一条**，
+/// 明细里立刻就会出现（命中 +分 / 未命中 +0）。
+/// </summary>
+public static class ScoreRuleCatalog
+{
+    /// <summary>六类规则的名称（索引 1~6，索引 0 不使用）。</summary>
+    public static readonly string[] CategoryNames =
+    {
+        string.Empty,
+        "底分",
+        "判定时机",
+        "所有数的种类",
+        "数列的种类与重叠",
+        "公差或公比",
+        "剩余的两张相等的数字牌",
+    };
+
+    /// <summary>全部规则，顺序固定。</summary>
+    public static readonly List<ScoreRuleDef> All = new List<ScoreRuleDef>
+    {
+        // 1. 底分
+        new ScoreRuleDef(ScoreRuleId.BaseLegalPlacement, 1, "底分",
+            "手牌合规放置底分", ScoreRules.BaseLegalPlacement),
+
+        // 2. 判定时机
+        new ScoreRuleDef(ScoreRuleId.FirstTurnSuccess, 2, "判定时机",
+            "第 1 回合即判定成功", ScoreRules.FirstTurnSuccess),
+
+        // 3. 所有数的种类
+        new ScoreRuleDef(ScoreRuleId.AllSameParity, 3, "所有数的种类",
+            "所有数都是奇数或偶数", ScoreRules.AllSameParity),
+        new ScoreRuleDef(ScoreRuleId.AllPrime, 3, "所有数的种类",
+            "所有数都是质数", ScoreRules.AllPrime),
+        new ScoreRuleDef(ScoreRuleId.AllComposite, 3, "所有数的种类",
+            "所有数都是合数", ScoreRules.AllComposite),
+
+        // 4. 数列的种类
+        new ScoreRuleDef(ScoreRuleId.AllSequencesArithmetic, 4, "数列的种类",
+            "所有数列都是等差数列", ScoreRules.AllSequencesArithmetic),
+        new ScoreRuleDef(ScoreRuleId.AllSequencesGeometric, 4, "数列的种类",
+            "所有数列都是等比数列", ScoreRules.AllSequencesGeometric),
+        new ScoreRuleDef(ScoreRuleId.AllSequencesFibonacci, 4, "数列的种类",
+            "所有数列都是斐波那契数列", ScoreRules.AllSequencesFibonacci),
+        new ScoreRuleDef(ScoreRuleId.OneEachOfThreeKinds, 4, "数列的种类",
+            "三条数列恰好为等差 / 等比 / 斐波那契各一个", ScoreRules.OneEachOfThreeKinds),
+
+        // 4. 数列的长度和重叠情况
+        new ScoreRuleDef(ScoreRuleId.ThreeArithmeticInto12Terms, 4, "数列的长度和重叠情况",
+            "三个等差数列拼成一条 12 项等差数列", ScoreRules.ThreeArithmeticInto12Terms),
+        new ScoreRuleDef(ScoreRuleId.TwoArithmeticInto8Terms, 4, "数列的长度和重叠情况",
+            "两个等差数列拼成一条 8 项等差数列", ScoreRules.TwoArithmeticInto8Terms),
+        new ScoreRuleDef(ScoreRuleId.TwoFibonacciInto8Terms, 4, "数列的长度和重叠情况",
+            "两个斐波那契数列拼成一条 8 项斐波那契数列", ScoreRules.TwoFibonacciInto8Terms),
+        new ScoreRuleDef(ScoreRuleId.TwoIdenticalSequences, 4, "数列的长度和重叠情况",
+            "存在两条完全相等的数列", ScoreRules.TwoIdenticalSequences),
+        new ScoreRuleDef(ScoreRuleId.SharedValuePerNumber, 4, "数列的长度和重叠情况",
+            "某个数字同时作为两条数列中的一项", ScoreRules.SharedValuePerNumber),
+
+        // 5. 公差 / 公比
+        new ScoreRuleDef(ScoreRuleId.TwoSameArithmeticDifference, 5, "公差或公比",
+            "存在两条公差相同的等差数列", ScoreRules.TwoSameArithmeticDifference),
+        new ScoreRuleDef(ScoreRuleId.ThreeSameArithmeticDifference, 5, "公差或公比",
+            "三条等差数列公差均相同", ScoreRules.ThreeSameArithmeticDifference),
+        new ScoreRuleDef(ScoreRuleId.TwoSameGeometricRatio, 5, "公差或公比",
+            "存在两条公比相同的等比数列", ScoreRules.TwoSameGeometricRatio),
+        new ScoreRuleDef(ScoreRuleId.ThreeSameGeometricRatio, 5, "公差或公比",
+            "三条等比数列公比均相同", ScoreRules.ThreeSameGeometricRatio),
+
+        // 6. 雀头
+        new ScoreRuleDef(ScoreRuleId.PairIsPrime, 6, "剩余的两张相等的数字牌",
+            "雀头为质数", ScoreRules.PairIsPrime),
+        new ScoreRuleDef(ScoreRuleId.PairIsOneOrHundred, 6, "剩余的两张相等的数字牌",
+            "雀头为 1 或 100", ScoreRules.PairIsOneOrHundred),
+    };
+
+    /// <summary>规则总条数。</summary>
+    public static int Count
+    {
+        get { return All.Count; }
+    }
+
+    /// <summary>按编号取规则定义，找不到返回 null。</summary>
+    public static ScoreRuleDef Find(ScoreRuleId id)
+    {
+        for (int i = 0; i < All.Count; i++)
+        {
+            if (All[i].id == id) return All[i];
+        }
+        return null;
+    }
+
+    /// <summary>某条规则在清单里的序号（从 1 开始），找不到返回 0。</summary>
+    public static int OrderOf(ScoreRuleId id)
+    {
+        for (int i = 0; i < All.Count; i++)
+        {
+            if (All[i].id == id) return i + 1;
+        }
+        return 0;
+    }
+}
+
 /// <summary>结算时的一条「数列」= 一个非雀头槽位组。</summary>
 public class SequenceLine
 {
@@ -261,9 +459,12 @@ public class HandLayout
     public int pairGroupIndex = -1;
 }
 
-/// <summary>一条加分项。</summary>
+/// <summary>一条加分项（= 一条命中的规则）。</summary>
 public class ScoreItem
 {
+    /// <summary>这条加分项对应哪条规则（用于把命中项对回规则清单）。</summary>
+    public ScoreRuleId ruleId;
+
     /// <summary>加分说明（会显示在结算画面上）。</summary>
     public string label;
 
@@ -278,11 +479,44 @@ public class ScoreItem
     /// </summary>
     public List<int> ownerGroups = new List<int>();
 
-    public ScoreItem(string label, int points)
+    public ScoreItem(ScoreRuleId ruleId, string label, int points)
     {
+        this.ruleId = ruleId;
         this.label = label;
         this.points = points;
     }
+}
+
+/// <summary>
+/// 「加分明细」里的一行：**完整的规则清单**，每条规则都会有一行，
+/// 命中的带实际分值，未命中的分值为 0。
+/// 这样结算画面列出来的就是全部规则，而不是「这次刚好命中的那几条」。
+/// </summary>
+public class ScoreRuleLine
+{
+    /// <summary>规则编号。</summary>
+    public ScoreRuleId id;
+
+    /// <summary>需求文本里的大类序号（1~6）。</summary>
+    public int category;
+
+    /// <summary>大类名。</summary>
+    public string categoryName;
+
+    /// <summary>
+    /// 该行显示的文案：命中时用「实际文案」（可能带具体数量，例如「有 3 个数字同时…」），
+    /// 未命中时用规则清单里的通用文案。
+    /// </summary>
+    public string label;
+
+    /// <summary>该行分值：命中 = 实际得分，未命中 = 0。</summary>
+    public int points;
+
+    /// <summary>本次是否命中。</summary>
+    public bool hit;
+
+    /// <summary>命中时这条加分归属的组（未命中为空）。</summary>
+    public List<int> ownerGroups = new List<int>();
 }
 
 /// <summary>一手牌的结算结果。</summary>
@@ -296,6 +530,13 @@ public class HandScoreResult
 
     /// <summary>命中的加分项（未命中任何一项时为空列表）。</summary>
     public List<ScoreItem> items = new List<ScoreItem>();
+
+    /// <summary>
+    /// **完整**的加分规则清单（长度恒等于 ScoreRuleCatalog.Count）。
+    /// 结算明细只挑其中 hit 的行显示（没加分的规则不显示），
+    /// 但这里始终是「本次这一手牌对照全部规则」的结果，供日志与离线回归比对。
+    /// </summary>
+    public List<ScoreRuleLine> ruleLines = new List<ScoreRuleLine>();
 
     /// <summary>
     /// 每组的分数，长度 = 组数，**各项之和恒等于 total**（分摊时余数补给索引最小的组）。
@@ -324,9 +565,6 @@ public class HandScoreResult
 }
 
 /// <summary>
-/// 槽位管理器。
-///
-/// 功能（对应文本中的 SlotManager）：
 ///   1. 位置检测：FindSlotAt —— 供 DragHandler 判断卡牌落在哪个槽位；
 ///   2. 读卡：把槽位里的数字读成 List，交给数列判定；
 ///   3. 数列判定：对每个组逐项判定它配置的候选类型（等差 / 等比 / 斐波那契 / 质数 / 雀头）；
@@ -636,7 +874,11 @@ public class SlotManager : MonoBehaviour
         }
 
         lastScoreResult = score;
-        lastResultSummary = ComposeSummary(lastGroupResults, score);
+
+        // 「加分明细」列的是**全部规则**（命中 +分 / 未命中 +0），
+        // 是否插入大类小标题由 UIManager 上的开关决定（默认平铺，保持不变）。
+        bool groupByCategory = UIManager.instance != null && UIManager.instance.endMenuDetailGroupByCategory;
+        lastResultSummary = ComposeSummary(lastGroupResults, score, groupByCategory);
 
         return score.total;
     }
@@ -785,7 +1027,7 @@ public class SlotManager : MonoBehaviour
 
         if (!result.isFull)
         {
-            return string.Format("{0} [{1}] 未放满（{2}/{3}），不参与判定",
+            return string.Format("{0} [{1}] 未放满，不参与判定",
                 result.groupName, values, result.values.Count, result.slotCount);
         }
 
@@ -797,7 +1039,7 @@ public class SlotManager : MonoBehaviour
 
         if (result.matched)
         {
-            return string.Format("{0} [{1}] 判定→ 命中【{3}】",
+            return string.Format("{0} [{1}] 判定→【{3}】",
                 result.groupName, values, tried, TypeNamesOf(result.matchedTypes));
         }
 
@@ -807,8 +1049,23 @@ public class SlotManager : MonoBehaviour
     /// <summary>
     /// 把「逐组判定 + 加分明细」拼成结算画面上的文字。
     /// 抽成静态函数便于离线比对文案。
+    ///
+    /// 【加分明细 = 只列真的加了分的规则】没命中的规则（分值为 0）**不出现在画面上**：
+    /// 明细是给玩家看「这几张牌为什么得这些分」的，20 条规则里通常只中 5~6 条，
+    /// 把其余十几行 `+0` 一并列出来只会把真正得分的那几行淹掉、还会把文本框撑满。
+    /// 完整规则表仍然保留在 <see cref="HandScoreResult.ruleLines"/> 里（恒
+    /// <see cref="ScoreRuleCatalog.Count"/> 行），供日志与离线回归比对。
     /// </summary>
     public static string ComposeSummary(List<GroupJudgeResult> groups, HandScoreResult score)
+    {
+        return ComposeSummary(groups, score, false);
+    }
+
+    /// <param name="groupByCategory">
+    /// 是否在规则之间插入大类小标题（底分 / 判定时机 / 所有数的种类 …）。
+    /// 默认 false = 沿用原来的平铺格式。
+    /// </param>
+    public static string ComposeSummary(List<GroupJudgeResult> groups, HandScoreResult score, bool groupByCategory)
     {
         StringBuilder sb = new StringBuilder();
 
@@ -825,7 +1082,6 @@ public class SlotManager : MonoBehaviour
             }
         }
 
-        sb.AppendLine();
         sb.AppendLine("【加分明细】");
 
         if (score == null)
@@ -837,21 +1093,53 @@ public class SlotManager : MonoBehaviour
         if (!score.legal)
         {
             sb.AppendLine("布局不合规（有组没放满 / 没命中任何类型 / 雀头不是两张相同的牌），本次不得分。");
-            sb.AppendLine("本次合计  +0");
-            return sb.ToString();
         }
 
-        if (score.items.Count == 0)
+        // ---- 明细行：只列「这次真的加了分」的规则 ----
+        // 判据是 ruleLines[i].hit（由 BuildRuleLines 按规则编号在命中列表里查出来的），
+        // 不是「文案里有没有出现」—— 命中项的文案可能带具体数量（「有 3 个数字同时…」）。
+        int shown = 0;
+
+        if (score.ruleLines != null && score.ruleLines.Count > 0)
         {
-            sb.AppendLine("（无额外加分项）");
+            // 大类小标题按「大类名」换，而不是按大类序号 ——
+            // 需求文本的第 4 条「数列的种类」底下还有「数列的长度和重叠情况」这一块，
+            // 两块都属于第 4 节，但标题得各出现一次。
+            string lastCategoryName = null;
+
+            for (int i = 0; i < score.ruleLines.Count; i++)
+            {
+                ScoreRuleLine line = score.ruleLines[i];
+                if (line == null || !line.hit || line.points == 0) continue;    // 没加分 → 不显示
+
+                if (groupByCategory && !string.Equals(line.categoryName, lastCategoryName, StringComparison.Ordinal))
+                {
+                    lastCategoryName = line.categoryName;
+                    sb.AppendLine("— " + line.category + ". " + line.categoryName + " —");
+                }
+
+                sb.AppendLine(FormatRuleLine(line));
+                shown++;
+            }
         }
         else
         {
+            // 兜底：手写的 HandScoreResult（没走 EvaluateHand）只有命中列表，就只列命中项
             for (int i = 0; i < score.items.Count; i++)
             {
                 ScoreItem item = score.items[i];
+                if (item == null || item.points == 0) continue;
+
                 sb.AppendLine(string.Format("{0}  +{1}", item.label, item.points));
+                shown++;
             }
+        }
+
+        // 一条都没命中时才提这一句：合规却一条不加分理论上不会发生（底分恒 +1），
+        // 不合规时上面已经写过原因了，不必再补一句「无额外加分项」。
+        if (shown == 0 && score.legal)
+        {
+            sb.AppendLine("（无额外加分项）");
         }
 
         sb.AppendLine(string.Format("本次合计  +{0}", score.total));
@@ -860,7 +1148,7 @@ public class SlotManager : MonoBehaviour
         if (score.groupScores != null && score.groupScores.Count > 0)
         {
             sb.AppendLine();
-            sb.AppendLine("【各组得分】（依次显示的就是这几项）");
+            sb.AppendLine("【各组得分】");
 
             for (int i = 0; i < score.groupScores.Count; i++)
             {
@@ -885,7 +1173,11 @@ public class SlotManager : MonoBehaviour
     public static HandScoreResult EvaluateHand(HandLayout layout, int turnCount)
     {
         HandScoreResult result = new HandScoreResult();
-        if (layout == null) return result;
+        if (layout == null)
+        {
+            BuildRuleLines(result);     // 布局为 null 也要有完整规则表可显示
+            return result;
+        }
 
         // 组数：优先用布局里显式指定的（= 场景里 slotGroups 的条数），否则按「三条数列 + 雀头」推断
         int groupCount = layout.groupCount > 0 ? layout.groupCount : layout.sequences.Count + 1;
@@ -904,6 +1196,9 @@ public class SlotManager : MonoBehaviour
         if (!result.legal)
         {
             result.total = 0;
+            // 不合规也把规则表铺全（全部 +0）：玩家能看到「一共有些什么规则」，
+            // 再对照上面的「布局不合规」提示就知道这次为什么一分没拿到。
+            BuildRuleLines(result);
             return result;      // groupScores 保持全 0，与 total 一致
         }
 
@@ -914,12 +1209,12 @@ public class SlotManager : MonoBehaviour
         List<SequenceLine> fibSeqs = FilterByType(seqs, SequenceType.Fibonacci);
 
         // ---- 1. 底分 ----
-        Add(items, "手牌合规放置底分", ScoreRules.BaseLegalPlacement);
+        Add(items, ScoreRuleId.BaseLegalPlacement, "手牌合规放置底分", ScoreRules.BaseLegalPlacement);
 
         // ---- 2. 判定时机 ----
         if (turnCount <= 1)
         {
-            Add(items, "第 1 回合即判定成功", ScoreRules.FirstTurnSuccess);
+            Add(items, ScoreRuleId.FirstTurnSuccess, "第 1 回合即判定成功", ScoreRules.FirstTurnSuccess);
         }
 
         // ---- 3. 所有数的种类（数列 + 雀头里的全部数字） ----
@@ -927,33 +1222,33 @@ public class SlotManager : MonoBehaviour
 
         if (AllSameParity(allNumbers))
         {
-            Add(items, "所有数都是奇数或偶数", ScoreRules.AllSameParity);
+            Add(items, ScoreRuleId.AllSameParity, "所有数都是奇数或偶数", ScoreRules.AllSameParity);
         }
         if (AllPrimeNumbers(allNumbers))
         {
-            Add(items, "所有数都是质数", ScoreRules.AllPrime);
+            Add(items, ScoreRuleId.AllPrime, "所有数都是质数", ScoreRules.AllPrime);
         }
         else if (AllCompositeNumbers(allNumbers))
         {
-            Add(items, "所有数都是合数", ScoreRules.AllComposite);
+            Add(items, ScoreRuleId.AllComposite, "所有数都是合数", ScoreRules.AllComposite);
         }
 
         // ---- 4. 所有数列的种类 ----
         if (AllMatchType(seqs, SequenceType.Arithmetic))
         {
-            Add(items, "所有数列都是等差数列", ScoreRules.AllSequencesArithmetic);
+            Add(items, ScoreRuleId.AllSequencesArithmetic, "所有数列都是等差数列", ScoreRules.AllSequencesArithmetic);
         }
         if (AllMatchType(seqs, SequenceType.Geometric))
         {
-            Add(items, "所有数列都是等比数列", ScoreRules.AllSequencesGeometric);
+            Add(items, ScoreRuleId.AllSequencesGeometric, "所有数列都是等比数列", ScoreRules.AllSequencesGeometric);
         }
         if (AllMatchType(seqs, SequenceType.Fibonacci))
         {
-            Add(items, "所有数列都是斐波那契数列", ScoreRules.AllSequencesFibonacci);
+            Add(items, ScoreRuleId.AllSequencesFibonacci, "所有数列都是斐波那契数列", ScoreRules.AllSequencesFibonacci);
         }
         if (HasOneOfEachOfThreeKinds(seqs))
         {
-            Add(items, "三条数列恰好分别为等差 / 等比 / 斐波那契各一个", ScoreRules.OneEachOfThreeKinds);
+            Add(items, ScoreRuleId.OneEachOfThreeKinds, "三条数列恰好分别为等差 / 等比 / 斐波那契各一个", ScoreRules.OneEachOfThreeKinds);
         }
 
         // ---- 5. 数列的长度与重叠 ----
@@ -964,7 +1259,7 @@ public class SlotManager : MonoBehaviour
             List<int> merged = ConcatValues(arithSeqs);
             if (merged.Count == ScoreRules.MergedThreeArithmeticTerms && IsArithmetic(merged))
             {
-                Add(items, "三个等差数列拼成一条 12 项等差数列", ScoreRules.ThreeArithmeticInto12Terms,
+                Add(items, ScoreRuleId.ThreeArithmeticInto12Terms, "三个等差数列拼成一条 12 项等差数列", ScoreRules.ThreeArithmeticInto12Terms,
                     GroupIndexesOf(arithSeqs));
             }
         }
@@ -974,14 +1269,14 @@ public class SlotManager : MonoBehaviour
         int mergeA, mergeB;
         if (TryFindMergePair(arithSeqs, ScoreRules.MergedTwoSequenceTerms, false, out mergeA, out mergeB))
         {
-            Add(items, "两个等差数列拼成一条 8 项等差数列", ScoreRules.TwoArithmeticInto8Terms,
+            Add(items, ScoreRuleId.TwoArithmeticInto8Terms, "两个等差数列拼成一条 8 项等差数列", ScoreRules.TwoArithmeticInto8Terms,
                 arithSeqs[mergeA].groupIndex, arithSeqs[mergeB].groupIndex);
         }
 
         // 5.3 存在两个斐波那契数列拼成一条 8 项斐波那契数列
         if (TryFindMergePair(fibSeqs, ScoreRules.MergedTwoSequenceTerms, true, out mergeA, out mergeB))
         {
-            Add(items, "两个斐波那契数列拼成一条 8 项斐波那契数列", ScoreRules.TwoFibonacciInto8Terms,
+            Add(items, ScoreRuleId.TwoFibonacciInto8Terms, "两个斐波那契数列拼成一条 8 项斐波那契数列", ScoreRules.TwoFibonacciInto8Terms,
                 fibSeqs[mergeA].groupIndex, fibSeqs[mergeB].groupIndex);
         }
 
@@ -989,7 +1284,7 @@ public class SlotManager : MonoBehaviour
         int equalA, equalB;
         if (TryFindIdenticalPair(seqs, out equalA, out equalB))
         {
-            Add(items, "存在两条完全相等的数列", ScoreRules.TwoIdenticalSequences,
+            Add(items, ScoreRuleId.TwoIdenticalSequences, "存在两条完全相等的数列", ScoreRules.TwoIdenticalSequences,
                 seqs[equalA].groupIndex, seqs[equalB].groupIndex);
         }
 
@@ -998,7 +1293,7 @@ public class SlotManager : MonoBehaviour
         int sharedCount = CountSharedValues(seqs);
         if (sharedCount > 0)
         {
-            Add(items, string.Format("有 {0} 个数字同时出现在两条数列中", sharedCount),
+            Add(items, ScoreRuleId.SharedValuePerNumber, string.Format("有 {0} 个数字同时出现在两条数列中", sharedCount),
                 sharedCount * ScoreRules.SharedValuePerNumber, CollectSharedValueGroups(seqs));
         }
 
@@ -1007,24 +1302,24 @@ public class SlotManager : MonoBehaviour
         int diffA, diffB;
         if (arithSeqs.Count == ScoreRules.SequenceCount && AllSameCommonDifference(arithSeqs))
         {
-            Add(items, "三条等差数列公差均相同", ScoreRules.ThreeSameArithmeticDifference,
+            Add(items, ScoreRuleId.ThreeSameArithmeticDifference, "三条等差数列公差均相同", ScoreRules.ThreeSameArithmeticDifference,
                 GroupIndexesOf(arithSeqs));
         }
         else if (TryFindSameDifferencePair(arithSeqs, out diffA, out diffB))
         {
-            Add(items, "存在两条公差相同的等差数列", ScoreRules.TwoSameArithmeticDifference,
+            Add(items, ScoreRuleId.TwoSameArithmeticDifference, "存在两条公差相同的等差数列", ScoreRules.TwoSameArithmeticDifference,
                 arithSeqs[diffA].groupIndex, arithSeqs[diffB].groupIndex);
         }
 
         int ratioA, ratioB;
         if (geoSeqs.Count == ScoreRules.SequenceCount && AllSameCommonRatio(geoSeqs))
         {
-            Add(items, "三条等比数列公比均相同", ScoreRules.ThreeSameGeometricRatio,
+            Add(items, ScoreRuleId.ThreeSameGeometricRatio, "三条等比数列公比均相同", ScoreRules.ThreeSameGeometricRatio,
                 GroupIndexesOf(geoSeqs));
         }
         else if (TryFindSameRatioPair(geoSeqs, out ratioA, out ratioB))
         {
-            Add(items, "存在两条公比相同的等比数列", ScoreRules.TwoSameGeometricRatio,
+            Add(items, ScoreRuleId.TwoSameGeometricRatio, "存在两条公比相同的等比数列", ScoreRules.TwoSameGeometricRatio,
                 geoSeqs[ratioA].groupIndex, geoSeqs[ratioB].groupIndex);
         }
 
@@ -1032,11 +1327,11 @@ public class SlotManager : MonoBehaviour
         int pairValue = layout.pair[0];
         if (pairValue == 1 || pairValue == 100)
         {
-            Add(items, "雀头为 1 或 100", ScoreRules.PairIsOneOrHundred, pairGroup);
+            Add(items, ScoreRuleId.PairIsOneOrHundred, "雀头为 1 或 100", ScoreRules.PairIsOneOrHundred, pairGroup);
         }
         else if (NumberCardData.IsPrimeNumber(pairValue))
         {
-            Add(items, "雀头为质数", ScoreRules.PairIsPrime, pairGroup);
+            Add(items, ScoreRuleId.PairIsPrime, "雀头为质数", ScoreRules.PairIsPrime, pairGroup);
         }
 
         // ---- 合计 ----
@@ -1049,6 +1344,10 @@ public class SlotManager : MonoBehaviour
             DistributePoints(items[i].points, items[i].ownerGroups, groupCount, result.groupScores);
         }
         result.total = total;
+
+        // 把「全部规则」铺成明细行：命中的带分值、未命中的 +0
+        BuildRuleLines(result);
+
         return result;
     }
 
@@ -1134,41 +1433,110 @@ public class SlotManager : MonoBehaviour
     }
 
     /// <summary>加一条「手牌级」加分项：不归属任何组，显示时平摊到全部组。</summary>
-    private static void Add(List<ScoreItem> items, string label, int points)
+    private static void Add(List<ScoreItem> items, ScoreRuleId id, string label, int points)
     {
         if (items == null || points == 0) return;
-        items.Add(new ScoreItem(label, points));
+        items.Add(new ScoreItem(id, label, points));
     }
 
     /// <summary>加一条归属到单个组的加分项（例如雀头类加分只算在雀头那一组）。</summary>
-    private static void Add(List<ScoreItem> items, string label, int points, int groupIndex)
+    private static void Add(List<ScoreItem> items, ScoreRuleId id, string label, int points, int groupIndex)
     {
         if (items == null || points == 0) return;
 
-        ScoreItem item = new ScoreItem(label, points);
+        ScoreItem item = new ScoreItem(id, label, points);
         item.ownerGroups.Add(groupIndex);
         items.Add(item);
     }
 
     /// <summary>加一条归属到两个组的加分项（例如「存在两条公差相同的数列」）。</summary>
-    private static void Add(List<ScoreItem> items, string label, int points, int groupA, int groupB)
+    private static void Add(List<ScoreItem> items, ScoreRuleId id, string label, int points, int groupA, int groupB)
     {
         if (items == null || points == 0) return;
 
-        ScoreItem item = new ScoreItem(label, points);
+        ScoreItem item = new ScoreItem(id, label, points);
         item.ownerGroups.Add(groupA);
         item.ownerGroups.Add(groupB);
         items.Add(item);
     }
 
     /// <summary>加一条归属到一组组的加分项（列表为空 = 等同于手牌级）。</summary>
-    private static void Add(List<ScoreItem> items, string label, int points, List<int> groupIndexes)
+    private static void Add(List<ScoreItem> items, ScoreRuleId id, string label, int points, List<int> groupIndexes)
     {
         if (items == null || points == 0) return;
 
-        ScoreItem item = new ScoreItem(label, points);
+        ScoreItem item = new ScoreItem(id, label, points);
         if (groupIndexes != null) item.ownerGroups.AddRange(groupIndexes);
         items.Add(item);
+    }
+
+    /// <summary>
+    /// 按规则清单把「全部规则」铺成明细行：命中的取实际文案与分值，未命中的留 0。
+    /// 结果写进 result.ruleLines，**长度恒等于 ScoreRuleCatalog.Count**（新增规则不会漏），
+    /// 结算明细再从里面挑 hit 的行显示。
+    /// </summary>
+    public static void BuildRuleLines(HandScoreResult result)
+    {
+        if (result == null) return;
+
+        result.ruleLines.Clear();
+
+        for (int i = 0; i < ScoreRuleCatalog.All.Count; i++)
+        {
+            ScoreRuleDef def = ScoreRuleCatalog.All[i];
+            ScoreRuleLine line = new ScoreRuleLine();
+            line.id = def.id;
+            line.category = def.category;
+            line.categoryName = def.categoryName;
+            line.label = def.label;
+            line.points = 0;
+            line.hit = false;
+
+            ScoreItem hit = FindItem(result.items, def.id);
+            if (hit != null)
+            {
+                line.hit = true;
+                line.label = hit.label;         // 命中时用实际文案（可能带「有 N 个…」这类具体数量）
+                line.points = hit.points;
+                if (hit.ownerGroups != null) line.ownerGroups.AddRange(hit.ownerGroups);
+            }
+
+            result.ruleLines.Add(line);
+        }
+    }
+
+    /// <summary>在命中列表里按规则编号找加分项，找不到返回 null。</summary>
+    public static ScoreItem FindItem(List<ScoreItem> items, ScoreRuleId id)
+    {
+        if (items == null) return null;
+
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (items[i] != null && items[i].ruleId == id) return items[i];
+        }
+        return null;
+    }
+
+    /// <summary>把全部规则拼成「每行一条」的文字（标签 + 分值），用于日志与离线比对。</summary>
+    public static string DescribeRuleLines(List<ScoreRuleLine> lines)
+    {
+        if (lines == null || lines.Count == 0) return "（无）";
+
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < lines.Count; i++)
+        {
+            ScoreRuleLine line = lines[i];
+            sb.AppendLine(FormatRuleLine(line));
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>单行写法：`规则文案  +分值`。未命中就是 +0，格式与命中项完全一致。</summary>
+    public static string FormatRuleLine(ScoreRuleLine line)
+    {
+        if (line == null) return string.Empty;
+
+        return string.Format("{0}  +{1}", line.label, line.points);
     }
 
     /// <summary>收集所有已放置的数字（三条数列 + 雀头）。</summary>

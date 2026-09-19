@@ -3,11 +3,9 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
+using TMPro;
 
 /// <summary>
-/// 界面管理器。挂在场景里的常驻物体上（示例挂在 GameRoot 上，与 GameManager 同一个物体即可）。
-///
-/// 职责（对应文本中的 UIManager）：
 ///   1. 场景变化：mainMenu / gamePanel / endMenu / ranking 四个面板的互斥切换；
 ///   2. 分数显示：把 GameManager.score 写到 Text 上；
 ///   3. 结算画面与结束画面共用 endMenuPanel（都显示「标题 + 分数 + 明细」）；
@@ -54,8 +52,22 @@ public class UIManager : MonoBehaviour
     [Tooltip("本次总分")]
     public Text endMenuScoreText;
 
-    [Tooltip("明细，显示各组判定结果")]
+    [Tooltip("明细，显示各组判定结果 + 完整的加分规则明细")]
     public Text endMenuDetailText;
+
+    [Header("结算明细（规则很多，要能全部显示出来）")]
+    [Tooltip("明细最多用多大字。留 0 = 用 Text 组件上现在的字号（会被记下来，不随自动缩字变化）")]
+    public int endMenuDetailMaxFontSize = 0;
+
+    [Tooltip("明细自动缩字的下限。缩到这个字号还放不下就允许溢出（可见地被挤出框，而不是被悄悄裁掉）")]
+    public int endMenuDetailMinFontSize = 12;
+
+    [Tooltip("自动把明细文本的 Vertical Overflow 改成 Overflow。" +
+        "Unity 默认的 Truncate 会在文本比框高时**静默吃掉尾部行** —— 规则再多也看不到，所以默认打开")]
+    public bool endMenuDetailAutoOverflow = true;
+
+    [Tooltip("加分明细里是否插入大类小标题（底分 / 判定时机 / 所有数的种类 …）。默认关闭 = 沿用原来的平铺格式")]
+    public bool endMenuDetailGroupByCategory = false;
 
     [Header("按钮（拖入即可，点击事件由代码自动绑定）")]
     [Tooltip("主菜单 → 开始游戏")]
@@ -145,8 +157,17 @@ public class UIManager : MonoBehaviour
     [Tooltip("表头行。指标顺序固定为 学号 / 平均分 / 最高得分 / 游玩局数")]
     public string rankingHeaderLine = string.Empty;
 
-    [Tooltip("每行的格式：{0} = 学号，{1} = 平均分，{2} = 最高得分，{3} = 游玩局数。" )]
+    [Tooltip("每行的格式：{0} = 学号，{1} = 平均分，{2} = 最高得分，{3} = 游玩局数。列的顺序别改")]
     public string rankingLineFormat = RankingTextBuilder.DefaultLineFormat;
+
+    [Tooltip("每行四个指标之间的空格数（>=1 时覆盖 rankingLineFormat 里的原样间隔，<=0 则完全按那个字符串来）。想调列间距改这一个数就行")]
+    public int rankingColumnSpaces = RankingTextBuilder.DefaultColumnSpaces;
+
+    [Tooltip("列对齐：把每个指标补到「本列最宽的那个值」的宽度，位数不同的数字（1 / 111）也能严格对齐。关掉则回到只按固定空格数分隔的老排版")]
+    public bool rankingAlignColumns = true;
+
+    [Tooltip("自动把 rankingText 的 Horizontal Overflow 设成 Overflow：某一行超宽时向右延伸，而不是换行把整张表的列错位")]
+    public bool rankingAutoOverflow = true;
 
     [Tooltip("平均分的数字格式")]
     public string rankingAverageFormat = RankingTextBuilder.DefaultAverageFormat;
@@ -154,13 +175,28 @@ public class UIManager : MonoBehaviour
     [Tooltip("一条记录都没有时显示的文案")]
     public string rankingEmptyText = RankingTextBuilder.DefaultEmptyText;
 
+    [Header("排行榜排序下拉框（TMP_Dropdown）")]
+    [Tooltip("主菜单里的下拉框，用来让玩家切换排行方式。留空时排行榜仍按 rankingSortMode 排，只是不能切")]
+    public TMP_Dropdown rankingDropdown;
+
+    [Tooltip("下拉框的选项文字，顺序必须与 RankingSortMode 一致：0=按学号 1=按平均分 2=按最高得分 3=按游玩局数")]
+    public string[] rankingDropdownOptions = RankingSort.CreateModeLabels();
+
+    [Tooltip("启动时用上面的文字重写下拉框的 Options。**建议开着**：Options 默认是 Option A/B/C/D，只有重写才会变成中文（手写在 item 上的字不会出现在列表里）")]
+    public bool rankingDropdownAutoOptions = true;
+
+    [Tooltip("自动把下拉框的 onValueChanged 接到 OnRankingDropdownValueChanged。关掉就得自己在 Inspector 里连线（两种方式效果一样）")]
+    public bool rankingDropdownAutoBind = true;
+
+    [Tooltip("把模板里多余的 item 收起来只留第一个：TMP_Dropdown 只把第一个 Toggle 当行模板复制，其余会原样留在弹出的列表里变成多余的行")]
+    public bool rankingDropdownPruneExtraItems = true;
+
 
     [Header("教程面板（长文本 + ScrollView）")]
     [Tooltip("教程面板的根物体（Canvas/tutorial）")]
     public GameObject tutorialPanel;
 
-    [Tooltip("教程正文的 Text 组件。**必须拖 uGUI 的 Text (Legacy)**，" +
-             "别拖 Text (TMP)——两者类型不同，TMP 拖不进这个字段")]
+    [Tooltip("教程正文的 Text 组件")]
     public Text tutorialText;
 
     [Tooltip("教程的 ScrollRect。留空会从 tutorialText 往上自动找")]
@@ -172,11 +208,10 @@ public class UIManager : MonoBehaviour
     [Tooltip("Resources 下的教程文件名（不带扩展名）")]
     public string tutorialResourcePath = "tutorial";
 
-    [Tooltip("教程正文字号。**改这里就够了**：运行时会覆盖 Text 组件上的 Font Size")]
+    [Tooltip("教程正文字号")]
     public float tutorialFontSize = 45f;
 
-    [Tooltip("原文的基准字号。文档里标题写的是绝对像素值（大标题 65 / 小标题 55），" +
-             "按「tutorialFontSize ÷ 这个值」等比缩放标题，改字号时标题才不会头重脚轻")]
+    [Tooltip("原文的基准字号")]
     public float tutorialSourceFontSize = TutorialTextFormatter.DefaultSourceFontSize;
 
     [Tooltip("行距倍数")]
@@ -189,12 +224,11 @@ public class UIManager : MonoBehaviour
     public float tutorialContentPadding = 12f;
 
 
-    [Header("「写给老师」面板（长文本 + ScrollView，结构与教程完全一致）")]
+    [Header("「写给老师」面板")]
     [Tooltip("面板的根物体（Canvas/forTeacher）")]
     public GameObject forTeacherPanel;
 
-    [Tooltip("正文的 Text 组件。**必须拖 Text (Legacy)**，别拖 Text (TMP)。" +
-             "留空会自动在 ScrollRect 的 Content 里找一个")]
+    [Tooltip("正文的 Text 组件")]
     public Text forTeacherText;
 
     [Tooltip("面板的 ScrollRect。留空会自动从 Text / 面板往上找")]
@@ -226,9 +260,7 @@ public class UIManager : MonoBehaviour
     [Tooltip("关闭按钮在面板下的名字。场景里 tutorial / forTeacher 两个面板都叫 close")]
     public string panelCloseButtonName = "close";
 
-    [Tooltip("勾选后：若关闭按钮被同级的 Viewport / 正文盖住（点击被它们吃掉），" +
-             "启动时自动把它提到同级最后一位。**建议保持勾选** —— " +
-             "否则层级顺序一旦不对，就会变成「close 明明调了 SetActive(false) 却关不掉」")]
+    [Tooltip("启动时自动把它提到同级最后一位。**建议保持勾选** —— ")]
     public bool autoRaiseCloseButtons = true;
 
 
@@ -249,8 +281,6 @@ public class UIManager : MonoBehaviour
 
     /// <summary>
     /// 教程 / 「写给老师」两个长文本面板的操作对象。
-    ///
-    /// 两个面板的结构、坑、行为完全一样（ScrollRect + Viewport + Content + Text (Legacy)，
     /// 正文几千字要换行、要按字号重算高度、关闭按钮还可能被 Viewport 盖住），
     /// 所以共用 ScrollTextPanel 这一套实现，这里只负责在每次操作前把 Inspector 上的字段同步进去
     /// （见 EnsureViews）。协程句柄与 Resources 缓存也由它自己持有。
@@ -296,12 +326,12 @@ public class UIManager : MonoBehaviour
         // 关闭按钮防遮挡：越早做越好。面板此刻还是隐藏的也无所谓 —— SetAsLastSibling 不需要布局，
         // 先修好，免得玩家第一次打开教程就发现 × 点不动。
         EnsurePanelCloseButtonsClickable();
+
+        // 下拉框：选项文字、行模板兜底、onValueChanged 连线都在这里一次配好（幂等，InitializeUi 里还会再配一次）
+        SetupRankingDropdown();
     }
 
-    // ------------------------------------------------------------------
-    // 长文本面板：把 Inspector 字段同步给 ScrollTextPanel
-    // ------------------------------------------------------------------
-
+    #region 长文本面板
     /// <summary>
     /// 取出（必要时创建）两个长文本面板的操作对象，并把 Inspector 上的当前值同步进去。
     ///
@@ -363,11 +393,9 @@ public class UIManager : MonoBehaviour
         tutorialView.EnsureCloseClickable();
         forTeacherView.EnsureCloseClickable();
     }
+    #endregion
 
-    // ------------------------------------------------------------------
-    // 场景变化
-    // ------------------------------------------------------------------
-
+    # region 场景变化
     /// <summary>
     /// 初始化界面：只显示 mainMenu，并确保删卡区、逐组分数字文本、学号输入界面都是隐藏的。
     /// 玩家点「开始游戏」时会先被挡住并弹出学号界面（见 GameManager.StartGame）。
@@ -379,6 +407,7 @@ public class UIManager : MonoBehaviour
         HideDedicatedTotalText();
         SetStudentIdPanelVisible(false);
         ClearStudentIdHint();
+
 
         // 教程 / 写给老师：先把正文写好（面板此刻是隐藏的也无所谓，写 Text 不要求物体激活），再收起来。
         // 高度拟合放在这里做没有意义（面板未激活时布局不重算），所以只写内容，
@@ -392,10 +421,15 @@ public class UIManager : MonoBehaviour
         // 防的是「开局前有人在编辑器 / 别的脚本里动过层级」）
         EnsurePanelCloseButtonsClickable();
 
+        // 下拉框：保证「打开主菜单时它显示的就是当前排序方式」，而不是上次运行时留下的选项
+        SetupRankingDropdown();
+
         // 把排行榜文本按当前记录刷新一遍：同一台机器上换人玩时不会看到上一次的旧内容
         RefreshRankingText(rankingSortMode);
 
         ShowMainMenu();
+
+        scoreText.text = "点击结算";
     }
 
     /// <summary>显示主菜单。</summary>
@@ -438,6 +472,10 @@ public class UIManager : MonoBehaviour
         SetPanelsActive(showEndMenu: true);
         if (endMenuScoreText != null) endMenuScoreText.text = "得分：" + finalScore;
         if (endMenuDetailText != null) endMenuDetailText.text = detail ?? string.Empty;
+
+        // 明细里现在会列出全部 20 条加分规则，很长 —— 必须先激活面板再量高度（未激活时布局不重算），
+        // 然后按框高把字号缩到装得下为止。
+        FitEndMenuDetail();
     }
 
     /// <summary>面板互斥切换。只传需要打开的那一个。</summary>
@@ -452,9 +490,213 @@ public class UIManager : MonoBehaviour
     }
 
     // ------------------------------------------------------------------
-    // 分数 / 回合显示
+    // 结算明细：把「全部加分规则」都显示出来的最后一道保障
+    //
+    // 明细现在固定列出 20 条规则 + 逐组判定 + 各组得分，总行数很容易到 30 行左右，
+    // 而 endPanel/detail 这个框是固定大小的。Unity 的 Text 默认
+    //   Vertical Overflow = Truncate
+    // 会在文本比框高时**静默裁掉尾部** —— 不报错、也不告诉你，玩家看到的规则表就是残缺的。
+    // 所以这里做两件事：
+    //   1. 强制 Vertical Overflow = Overflow（宁可挤出去，也不许悄悄吃掉）；
+    //   2. 把字号逐号往下试，直到整段文本装得进框（不低于 endMenuDetailMinFontSize）。
+    // 量高度用「按框宽换行后的真实排版高度」，所以量的是最终行数，不是行数估算。
     // ------------------------------------------------------------------
 
+    /// <summary>记下来的原始字号（自动缩字后 Text.fontSize 会变，不能反过来当上限）。</summary>
+    private int endMenuDetailBaseFontSize = -1;
+
+    /// <summary>明细文本的「基准字号」= 第一次看到的字号，或 Inspector 指定的上限。</summary>
+    private int ResolveDetailBaseFontSize()
+    {
+        if (endMenuDetailMaxFontSize > 0) return endMenuDetailMaxFontSize;
+
+        if (endMenuDetailBaseFontSize <= 0 && endMenuDetailText != null)
+        {
+            endMenuDetailBaseFontSize = Mathf.Max(1, endMenuDetailText.fontSize);
+        }
+        return endMenuDetailBaseFontSize > 0 ? endMenuDetailBaseFontSize : 35;
+    }
+
+    /// <summary>明细文本所在矩形的高度（父物体尺寸未知时退回屏幕高度按锚点折算）。</summary>
+    public float DetailBoxHeight()
+    {
+        if (endMenuDetailText == null) return 0f;
+
+        RectTransform rt = endMenuDetailText.rectTransform;
+        if (rt == null) return 0f;
+
+        Rect rect = ScrollPanelLayout.RectInParent(rt);
+        if (rect.height > 0f) return rect.height;
+
+        return rt.rect.height;
+    }
+
+    /// <summary>
+    /// 量「这段文字在指定字号下需要多高」。
+    /// 直接问文字生成器，不依赖 Canvas 是否已经重排过 —— 结算那一帧布局还没走完也能拿到真值。
+    /// </summary>
+    public static float MeasureDetailHeight(Text text, int fontSize)
+    {
+        if (text == null) return 0f;
+
+        text.fontSize = fontSize;
+
+        float width = text.rectTransform != null ? text.rectTransform.rect.width : 0f;
+        if (width <= 0f && text.rectTransform != null)
+        {
+            // 布局还没算过，rect.width 会是 0：按锚点参数现算一个宽度，
+            // 否则会退化成「不换行」去量，行数被低估，缩完字号照样溢出
+            width = ScrollPanelLayout.RectInParent(text.rectTransform).width;
+        }
+        if (width <= 0f) width = 100000f;          // 宽度真的未知时才按「不换行」量
+
+        TextGenerationSettings settings = text.GetGenerationSettings(new Vector2(width, 0f));
+        settings.resizeTextForBestFit = false;
+        settings.verticalOverflow = VerticalWrapMode.Overflow;   // 量全部内容，别按框裁
+
+        return text.cachedTextGeneratorForLayout.GetPreferredHeight(text.text ?? string.Empty, settings);
+    }
+
+    /// <summary>
+    /// 明细放在 ScrollRect 里时，把文本（和它的容器）撑到真实内容高度，
+    /// 这样滚动条能一直滚到底 —— 做法与 ScrollTextPanel.FitLayout 完全一致，
+    /// 尺寸已经交给 ContentSizeFitter / LayoutGroup 管的时候就不再手动改（否则两边互抢会抖）。
+    /// </summary>
+    private void GrowDetailContent(Text text, ScrollRect scroll)
+    {
+        if (text == null || text.rectTransform == null) return;
+
+        RectTransform textRect = text.rectTransform;
+
+        Canvas.ForceUpdateCanvases();
+        LayoutRebuilder.ForceRebuildLayoutImmediate(textRect);
+
+        float preferred = Mathf.Max(MeasureDetailHeight(text, text.fontSize), text.preferredHeight, 1f);
+
+        if (!ScrollTextPanel.IsSizeDrivenByLayout(textRect))
+        {
+            textRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, preferred);
+        }
+
+        RectTransform contentRect = textRect.parent as RectTransform;
+        if (contentRect != null && contentRect != textRect && !ScrollTextPanel.IsSizeDrivenByLayout(contentRect))
+        {
+            contentRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, preferred);
+        }
+
+        LayoutRebuilder.ForceRebuildLayoutImmediate(contentRect != null ? contentRect : textRect);
+        Canvas.ForceUpdateCanvases();
+
+        // 每次打开都从顶部开始，别停在上一次滚到的位置
+        if (scroll != null) scroll.verticalNormalizedPosition = 1f;
+    }
+
+    /// <summary>
+    /// 结算明细自动适配框高。
+    /// 返回 true = 全部内容都装得下（或在 ScrollRect 里能滚动看到）；
+    /// false = 已经缩到最小字号仍装不下（此时文本允许溢出，不会丢行）。
+    /// 幂等：每次都从基准字号重新量，重复调用不会越缩越小。
+    /// </summary>
+    public bool FitEndMenuDetail()
+    {
+        if (endMenuDetailText == null) return true;
+
+        Text text = endMenuDetailText;
+
+        // 1. 不许静默裁掉尾部
+        if (endMenuDetailAutoOverflow)
+        {
+            text.verticalOverflow = VerticalWrapMode.Overflow;
+            text.horizontalOverflow = HorizontalWrapMode.Wrap;
+        }
+
+        // 2. 自适应字号会干扰测量，先关掉（我们要自己控制字号）
+        text.resizeTextForBestFit = false;
+
+        int maxSize = ResolveDetailBaseFontSize();
+
+        // 3. 明细被放进 ScrollRect 时：不缩字，改成把内容撑高，由滚动条保证「全都看得到」。
+        //    缩字在这里反而是错的 —— 内容再长也只会越缩越小，而不是让人滚下去看。
+        ScrollRect scroll = endMenuDetailText.GetComponentInParent<ScrollRect>();
+        if (scroll != null)
+        {
+            text.fontSize = maxSize;
+            GrowDetailContent(text, scroll);
+            return true;
+        }
+
+        int minSize = Mathf.Clamp(endMenuDetailMinFontSize, 1, maxSize);
+
+        float boxHeight = DetailBoxHeight();
+        if (boxHeight <= 0f)
+        {
+            // 框高还量不出来（面板刚激活、布局没算完）：先按基准字号显示，下次再补
+            text.fontSize = maxSize;
+            return true;
+        }
+
+        float needed = MeasureDetailHeight(text, maxSize);
+
+        // 差不到一行就当作「装得下」：字号是整数，按比例缩下来常常只差几个像素，
+        // 这点溢出肉眼看不出来，不值得为它告警（真的差一整行以上才提示）。
+        if (needed <= boxHeight + DetailFitTolerance(maxSize))
+        {
+            text.fontSize = maxSize;      // 装得下，不用缩
+            return true;
+        }
+
+        // 3. 按比例估一个起点，再在附近逐号微调（比从 maxSize 一路试下来少很多次排版）
+        int guess = Mathf.FloorToInt(maxSize * (boxHeight / needed));
+        guess = Mathf.Clamp(guess, minSize, maxSize);
+
+        int fitted = minSize;
+        bool fits = false;
+
+        int from = Mathf.Min(maxSize, guess + 2);
+        for (int size = from; size >= minSize; size--)
+        {
+            if (MeasureDetailHeight(text, size) <= boxHeight + DetailFitTolerance(size))
+            {
+                fitted = size;
+                fits = true;
+                break;
+            }
+        }
+
+        text.fontSize = fitted;
+
+        if (!fits)
+        {
+            Debug.LogWarning(string.Format(
+                "[UIManager] 结算明细装不下：框高 {0:0}px，缩到最小字号 {1} 仍需要 {2:0}px。\n" +
+                "已把 Vertical Overflow 设为 Overflow（不再静默裁掉尾部），" +
+                "但建议把 {3} 的框加高（按现在的字号需要约 {4:0}px），" +
+                "或把它套进 ScrollRect 里滚动查看 —— 放进 ScrollRect 后本方法会自动改成「撑高内容 + 滚动」，不再缩字。",
+                boxHeight, minSize, MeasureDetailHeight(text, minSize), DetailPath(),
+                MeasureDetailHeight(text, maxSize)));
+        }
+
+        return fits;
+    }
+
+    /// <summary>
+    /// 自动缩字的容差 = 大约「不到一行」的高度。
+    /// 字号只能取整数，按比例缩下来常常只差几个像素就正好放下，没必要为此告警。
+    /// </summary>
+    public static float DetailFitTolerance(int fontSize)
+    {
+        return Mathf.Max(2f, fontSize * 0.8f);
+    }
+
+    /// <summary>明细文本在层级里的路径（日志用）。</summary>
+    private string DetailPath()
+    {
+        if (endMenuDetailText == null) return "endMenuDetailText";
+        return ScrollTextPanel.PathOf(endMenuDetailText.transform);
+    }
+    #endregion
+
+    #region 分数/回合显示
     /// <summary>刷新分数显示。</summary>
     public void UpdateScore(int newScore)
     {
@@ -477,9 +719,6 @@ public class UIManager : MonoBehaviour
     ///   2. 按索引 0 → N-1 **依次显示**「组名 + 该组分数」，每组之间间隔 settleStepInterval 秒；
     ///   3. 各组显示完后，**最后再显示总分**（settleTotalScoreText，未拖则复用 scoreText）；
     ///   4. 停留 settleHoldAfterTotal 秒（默认 2 秒）后弹出 endMenuPanel。
-    ///
-    /// 【动画期间不动盘面】本方法只负责分数文本与面板，不会去隐藏/销毁任何卡牌，
-    /// 槽位里的牌保持原样留在槽位上，玩家可以边看分数边对照牌面。
     /// </summary>
     /// <param name="groupScores">每组的分数，索引与 SlotManager.slotGroups 一致。</param>
     /// <param name="groupNames">每组的显示名，可为 null。</param>
@@ -577,8 +816,6 @@ public class UIManager : MonoBehaviour
 
     /// <summary>
     /// 显示 / 收起一个分数文本。
-    ///
-    /// 【为什么只切 Text 组件、绝不 SetActive(false) 物体】
     /// 这些分数文本很可能被摆成某一组的「组标题」，甚至直接挂在槽位组的容器上。
     /// 一旦用 SetActive(false) 把物体关掉，该组下面的槽位、以及已经放进去的牌会跟着一起消失——
     /// 表现出来就是「结算的时候牌被隐藏了」。只切组件开关就没有这个副作用：
@@ -718,10 +955,10 @@ public class UIManager : MonoBehaviour
             GameManager.Instance.GameOver();
         }
     }
+    #endregion
 
+    #region 长文本面板
     // ------------------------------------------------------------------
-    // 长文本面板（教程 / 写给老师）
-    //
     // 实现全部在 ScrollTextPanel 里（两个面板共用一套）：
     //   ApplyContent  写正文 + 强制打开「字号能生效」的开关
     //   FitLayout     按字号重算 Text 与 Content 的高度，让滚动范围跟着字号走
@@ -901,11 +1138,9 @@ public class UIManager : MonoBehaviour
         forTeacherView.ApplyContent();
         if (forTeacherView.IsVisible) forTeacherView.RequestFit();
     }
+    #endregion
 
-    // ------------------------------------------------------------------
-    // 学号输入（startGame 之前的环节）
-    // ------------------------------------------------------------------
-
+    #region 学号输入
     /// <summary>
     /// 从输入框读玩家输入的学号并校验。
     /// 数据源优先 studentIdInput（InputField），没拖则退回 studentIdText（自定义数字键盘方案）。
@@ -1024,9 +1259,9 @@ public class UIManager : MonoBehaviour
         SetStudentIdRaw(lastStudentId.ToString());
     }
 
-    // ------------------------------------------------------------------
-    // 排行榜：四个指标各一个排行函数（默认按学号），结果写进 rankingText
-    // ------------------------------------------------------------------
+    #endregion
+
+    #region 排行榜
 
     /// <summary>排行函数 1：按学号排列（默认）。</summary>
     public void ShowRankingByStudentId() { ShowRanking(RankingSortMode.ByStudentId); }
@@ -1082,7 +1317,28 @@ public class UIManager : MonoBehaviour
     /// <summary>只刷新 rankingText 的内容，不动面板显隐（切换排序方式、记录变动后刷新时用）。</summary>
     public void RefreshRankingText(RankingSortMode mode)
     {
+        // 顺手把下拉框的选中项对齐到同一个排序方式：四个老按钮、代码里改过 rankingSortMode、
+        // 重新读盘刷新 —— 不管从哪条路进来，界面上「选中的那个」和「实际排序用的那个」永远是同一个。
+        SyncRankingDropdownValue(mode);
+
         if (rankingText == null) return;
+
+        // 列间距调大之后，某一行可能比文本框还宽。默认的 Horizontal Overflow = Wrap 会把那一行
+        // 折成两行 —— 表格里一折，后面所有行的列都跟着错位（而且 Vertical Overflow = Truncate
+        // 会顺势把最后一行悄悄吃掉）。这里统一改成 Overflow：超宽就向右延伸，列永远对齐。
+        // 担心伸到面板外面的话把 rankingAutoOverflow 关掉即可（那样就回到换行）。
+        if (rankingAutoOverflow)
+        {
+            rankingText.horizontalOverflow = HorizontalWrapMode.Overflow;
+        }
+
+        // 列对齐靠 `<color=#00000000>` 的透明字形把短的数值补齐，
+        // 所以富文本必须开着 —— 一旦关掉，Unity 会把这串标签原样画到屏幕上。
+        // 这张榜的文本完全由代码写，不需要玩家手填富文本，强制打开没有副作用。
+        if (rankingAlignColumns)
+        {
+            rankingText.supportRichText = true;
+        }
 
         List<StudentRecord> ranked = RankingSort.Rank(ScoreRecordStore.Records, mode);
 
@@ -1094,12 +1350,140 @@ public class UIManager : MonoBehaviour
             rankingHeaderLine,
             rankingLineFormat,
             rankingAverageFormat,
-            rankingEmptyText);
+            rankingEmptyText,
+            rankingColumnSpaces,
+            rankingAlignColumns);
     }
 
-    // ------------------------------------------------------------------
-    // 删卡阶段（抽卡后强制删卡）
-    // ------------------------------------------------------------------
+    /// <summary>
+    /// 把场景里的下拉框（TMP_Dropdown）配置成「排行方式选择器」。幂等：Awake 与 InitializeUi 各调一次都安全。
+    ///
+    /// 【为什么这些事必须由代码来做】TMP_Dropdown 的弹出列表**不是**你在 Template 里摆的那几行：
+    ///   1. 它只把「模板里的第一个 Toggle」当行模板，复制 N 份（N = Options 的条数）；
+    ///   2. 每一行的文字取自 **Options 列表**，不是取自你手写在 item 上的那个 Text ——
+    ///      所以 Options 里留着 Option A/B/C/D，列表里显示的就是英文，item 上打的「按学号」根本不会出现；
+    ///   3. 行文字还得靠 Item Text 指向的 Text (TMP) 才画得出来，Item Text 空着 → 每行都是一片空白。
+    /// 这三处都容易在 Inspector 里配漏，所以统一在这里兜底。
+    /// </summary>
+    public void SetupRankingDropdown()
+    {
+        if (rankingDropdown == null) return;
+
+        RepairRankingDropdownTemplate();
+        ApplyRankingDropdownOptions();
+
+        if (rankingDropdownAutoBind)
+        {
+            // 先摘再挂：Awake 与 InitializeUi 都会调本方法，不去重的话监听器会越挂越多
+            rankingDropdown.onValueChanged.RemoveListener(OnRankingDropdownValueChanged);
+            rankingDropdown.onValueChanged.AddListener(OnRankingDropdownValueChanged);
+        }
+
+        SyncRankingDropdownValue(rankingSortMode);
+    }
+
+    /// <summary>
+    /// 下拉框「选中项变了」的回调：索引 0~3 直接对应 RankingSortMode。
+    /// 想自己在 Inspector 里连线的话，On Value Changed 里选这个函数（Dynamic int）即可，效果完全一样。
+    /// </summary>
+    public void OnRankingDropdownValueChanged(int index)
+    {
+        ShowRanking(RankingSort.ToMode(index));
+    }
+
+    /// <summary>
+    /// 把下拉框的选中项同步成当前排序方式（四个老按钮、代码改过 rankingSortMode、重新读盘时都会走这里）。
+    ///
+    /// 必须用 SetValueWithoutNotify：直接给 value 赋值会触发 onValueChanged，
+    /// 于是变成「改模式 → 同步下拉框 → 又回调改模式」来回刷。这里回调和同步必须单向。
+    /// </summary>
+    public void SyncRankingDropdownValue(RankingSortMode mode)
+    {
+        if (rankingDropdown == null) return;
+
+        int index = (int)mode;
+        if (index < 0 || index >= rankingDropdown.options.Count) return;   // 选项没配够就保持原样，别去动它
+
+        rankingDropdown.SetValueWithoutNotify(index);
+        rankingDropdown.RefreshShownValue();   // 选中项没变时 SetValue 会提前返回，标题文字得靠这句兜住
+    }
+
+    /// <summary>按 rankingDropdownOptions 重写选项文字（内容已经一样就不动，避免每次开局都重建一遍）。</summary>
+    private void ApplyRankingDropdownOptions()
+    {
+        if (!rankingDropdownAutoOptions) return;
+        if (rankingDropdownOptions == null || rankingDropdownOptions.Length == 0) return;
+
+        List<TMP_Dropdown.OptionData> wanted = new List<TMP_Dropdown.OptionData>(rankingDropdownOptions.Length);
+        for (int i = 0; i < rankingDropdownOptions.Length; i++)
+        {
+            wanted.Add(new TMP_Dropdown.OptionData(rankingDropdownOptions[i] ?? string.Empty));
+        }
+
+        List<TMP_Dropdown.OptionData> current = rankingDropdown.options;
+        if (current != null && current.Count == wanted.Count)
+        {
+            bool same = true;
+            for (int i = 0; i < wanted.Count; i++)
+            {
+                if (current[i] == null || current[i].text != wanted[i].text) { same = false; break; }
+            }
+            if (same) return;
+        }
+
+        rankingDropdown.options = wanted;
+        rankingDropdown.RefreshShownValue();
+    }
+
+    /// <summary>
+    /// 兜底修模板：Item Text 空着就自动在模板里找一个 Text (TMP) 补上（不改你已连好的）；
+    /// 模板里多摆的 item 收起来 —— 只 SetActive(false)，不删物体。
+    /// 想彻底删掉的话，在 Template/Viewport/Content 下只留一个 item 就行。
+    /// </summary>
+    private void RepairRankingDropdownTemplate()
+    {
+        Transform templateRoot = rankingDropdown.template;
+        if (templateRoot == null) return;
+
+        Toggle[] items = templateRoot.GetComponentsInChildren<Toggle>(true);
+        if (items == null || items.Length == 0) return;
+
+        if (rankingDropdown.itemText == null)
+        {
+            // 层级里最靠前的那个才是 TMP_Dropdown 认的行模板（它内部也是「找到的第一个 Toggle」）
+            TMP_Text label = null;
+            for (int i = 0; i < items.Length && label == null; i++)
+            {
+                label = items[i].GetComponentInChildren<TMP_Text>(true);
+            }
+
+            if (label != null)
+            {
+                rankingDropdown.itemText = label;
+                Debug.Log("[UIManager] 下拉框的 Item Text 没连，已自动指向「" + label.name +
+                          "」。想固定下来的话，把这个 Text 拖到 Dropdown 的 Item Text 上即可。");
+            }
+        }
+
+        if (!rankingDropdownPruneExtraItems) return;
+
+        int hidden = 0;
+        for (int i = 1; i < items.Length; i++)
+        {
+            if (!items[i].gameObject.activeSelf) continue;
+            items[i].gameObject.SetActive(false);
+            hidden++;
+        }
+
+        if (hidden > 0)
+        {
+            Debug.Log("[UIManager] 下拉框模板里多余的 " + hidden +
+                      " 个 item 已隐藏（TMP_Dropdown 只把第一个 Toggle 当行模板，其余会变成弹出列表里的多余行）。");
+        }
+    }
+    #endregion
+
+    #region 删卡
 
     /// <summary>
     /// 显示 / 隐藏删卡投放区（支持配置多个区域，一起显示或一起隐藏）。
@@ -1253,5 +1637,5 @@ public class UIManager : MonoBehaviour
         }
         nextTurnButton.interactable = true;
     }
-
+    #endregion
 }
